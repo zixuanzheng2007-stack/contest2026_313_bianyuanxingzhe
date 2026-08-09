@@ -18,9 +18,3 @@ out/
 *.elf
 *.hex
 *.map
-
-# edge-walker host project
-edge-walker/.venv/
-edge-walker/**/__pycache__/
-edge-walker/*.egg-info/
-edge-walker/.pytest_cache/
