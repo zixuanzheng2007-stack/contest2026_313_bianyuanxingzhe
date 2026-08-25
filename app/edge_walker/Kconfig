@@ -1,0 +1,5 @@
+config LVX_USE_DEMO_CONTEST2026_313_EDGE_WALKER
+	bool "Contest 2026 team 313 edge_walker (Zheng main + alert)"
+	default n
+	---help---
+		Edge walker NSH command `ew`: alert_output, fake approach, UART2 radar loop.
