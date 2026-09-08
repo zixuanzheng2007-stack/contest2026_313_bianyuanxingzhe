@@ -16,7 +16,7 @@ extern "C" {
 /* 告警刷屏：NONE=黑 / SOFT=黄 / STRONG=橙 / EMERGENCY=红 */
 void alert_lcd_show(ew_alert_level_t level, const char *reason);
 
-/* 上电待机画面（深蓝），用于 rcS: ew boot */
+/* 上电待机：LVGL 开 /dev/lcd0 常驻刷新（EW READY），用于 rcS: ew boot */
 void alert_lcd_boot_splash(void);
 
 /* 接线自检：依次红/绿/蓝/黑，每色约 0.5s；返回 0=fb 可用 */

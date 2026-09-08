@@ -3,11 +3,13 @@
  *
  * 1) 控制台一定打印一行（NSH / 串口能看见）
  * 2) 板上若有 /dev/pwm0，则按档位开蜂鸣；没有则跳过，不算失败
- * 3) 可选刷新 LCD 色块（alert_lcd）
+ * 3) PA28 无源蜂鸣器软件方波（DevKit-LCD 40P.23）
+ * 4) 可选刷新 LCD 色块（alert_lcd）
  ****************************************************************************/
 
 #include "alert_output.h"
 #include "alert_lcd.h"
+#include "alert_buzzer.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -91,6 +93,15 @@ void alert_output(ew_alert_level_t level, const char *reason)
 
 #ifdef __NuttX__
   pwm_apply(level);
+  if (level == EW_ALERT_NONE) {
+    alert_buzzer_stop();
+  } else if (level == EW_ALERT_EMERGENCY) {
+    alert_buzzer_beep(2500, 500);
+  } else if (level == EW_ALERT_STRONG) {
+    alert_buzzer_beep(2200, 400);
+  } else {
+    alert_buzzer_beep(1800, 350);
+  }
 #endif
   alert_lcd_show(level, reason);
 }

@@ -15,7 +15,9 @@
 
 #include "alert_lcd.h"
 #include "alert_output.h"
+#include "alert_buzzer.h"
 #include "ew_ld2451.h"
+#include "ew_wifi_at.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -238,6 +240,32 @@ static int cmd_loop(void)
   return 0;
 }
 
+static int cmd_buzz(int argc, char **argv)
+{
+  unsigned freq = 2500;
+  unsigned ms = 800;
+
+  if (argc >= 3) {
+    freq = (unsigned)atoi(argv[2]);
+  }
+  if (argc >= 4) {
+    ms = (unsigned)atoi(argv[3]);
+  }
+  printf("[ew] buzz test VCC=40P.2 GND=40P.14 IO=PA28/40P.23\n");
+  return alert_buzzer_beep(freq, ms);
+}
+
+static int cmd_wifi(int argc, char **argv)
+{
+  if (argc >= 3 && strcmp(argv[1], "wifi") == 0 && strcmp(argv[2], "ping") == 0) {
+    return ew_wifi_at_ping();
+  }
+  if (argc >= 3 && strcmp(argv[1], "at") == 0) {
+    return ew_wifi_at_cmd(argv[2]);
+  }
+  return ew_wifi_at_ping();
+}
+
 static void print_help(void)
 {
   printf("usage:\n");
@@ -247,6 +275,10 @@ static void print_help(void)
   printf("  ew parse                    decode official example frame\n");
   printf("  ew fixture soft|strong|emergency|away|empty\n");
   printf("  ew lcd info|selftest|boot\n");
+  printf("  ew boot                    LVGL splash + PA28 buzzer selftest\n");
+  printf("  ew buzz [freq_hz] [ms]     passive buzzer on PA28 (40P.23)\n");
+  printf("  ew at [CMD]                ESP AT on /dev/ttyS2 (PA24/25, 115200)\n");
+  printf("  ew wifi ping               send AT, expect OK\n");
 }
 
 static int cmd_lcd(int argc, char **argv)
@@ -283,6 +315,20 @@ int main(int argc, char *argv[])
   }
   if (argc >= 2 && strcmp(argv[1], "lcd") == 0) {
     return cmd_lcd(argc, argv);
+  }
+  if (argc >= 2 && (strcmp(argv[1], "buzz") == 0 || strcmp(argv[1], "buzzer") == 0)) {
+    return cmd_buzz(argc, argv);
+  }
+  if (argc >= 2 && (strcmp(argv[1], "at") == 0 || strcmp(argv[1], "wifi") == 0)) {
+    return cmd_wifi(argc, argv);
+  }
+  if (argc >= 2 && strcmp(argv[1], "boot") == 0) {
+    printf("[ew-boot] start argc=%d\n", argc);
+    fflush(stdout);
+    alert_lcd_boot_splash();
+    printf("[ew-boot] splash returned (should not)\n");
+    fflush(stdout);
+    return 0;
   }
   if (argc >= 2 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "help") == 0)) {
     print_help();
