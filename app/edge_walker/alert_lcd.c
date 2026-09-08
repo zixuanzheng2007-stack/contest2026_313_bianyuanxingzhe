@@ -3,6 +3,7 @@
  ****************************************************************************/
 
 #include "alert_lcd.h"
+#include "alert_buzzer.h"
 
 #include <stdio.h>
 #include <stdint.h>
@@ -12,8 +13,14 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <syslog.h>
 #include <sys/ioctl.h>
+#include <sys/boardctl.h>
+#include <nuttx/config.h>
 #include <nuttx/video/fb.h>
+#ifdef CONFIG_LV_USE_NUTTX
+#include <lvgl/lvgl.h>
+#endif
 #endif
 
 #define EW_FB_DEV "/dev/fb0"
@@ -127,11 +134,82 @@ void alert_lcd_show(ew_alert_level_t level, const char *reason)
 void alert_lcd_boot_splash(void)
 {
 #ifdef __NuttX__
-  /* 待机蓝：上电即亮，表示系统就绪 */
-  uint16_t blue = rgb565(0, 80, 200);
-  if (fb_fill_color(blue, NULL) == 0) {
-    printf("[alert_lcd] boot splash (ready)\n");
+#ifdef CONFIG_LV_USE_NUTTX
+  lv_nuttx_dsc_t info;
+  lv_nuttx_result_t result;
+  lv_obj_t *scr;
+  lv_obj_t *label;
+  int ret;
+  int lcdfd;
+
+  printf("[ew-boot] splash enter\n");
+  fflush(stdout);
+
+  if (lv_is_initialized()) {
+    printf("[ew-boot] ERR lv_is_initialized already, abort\n");
+    fflush(stdout);
+    return;
   }
+
+  ret = boardctl(BOARDIOC_INIT, 0);
+  printf("[ew-boot] boardctl ret=%d\n", ret);
+  fflush(stdout);
+  usleep(200000);
+
+  lcdfd = open("/dev/lcd0", O_RDWR);
+  printf("[ew-boot] lcd0 fd=%d errno=%d\n", lcdfd, lcdfd < 0 ? errno : 0);
+  fflush(stdout);
+  if (lcdfd >= 0) {
+    close(lcdfd);
+  }
+
+  lv_init();
+  lv_nuttx_dsc_init(&info);
+#ifdef CONFIG_LV_USE_NUTTX_LCD
+  info.fb_path = "/dev/lcd0";
+#endif
+#ifdef CONFIG_INPUT_TOUCHSCREEN
+  info.input_path = "/dev/input0";
+#endif
+  printf("[ew-boot] lv_nuttx_init fb_path=%s\n",
+         info.fb_path ? info.fb_path : "(default fb)");
+  fflush(stdout);
+  lv_nuttx_init(&info, &result);
+  if (result.disp == NULL) {
+    printf("[ew-boot] ERR lv_nuttx_init disp=NULL\n");
+    fflush(stdout);
+    return;
+  }
+
+  scr = lv_screen_active();
+  lv_obj_set_style_bg_color(scr, lv_color_hex(0x082060), 0);
+  lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+
+  label = lv_label_create(scr);
+  lv_label_set_text(label, "EW READY");
+  lv_obj_set_style_text_color(label, lv_color_white(), 0);
+  lv_obj_center(label);
+
+  printf("[ew-boot] OK splash, lv_timer_handler loop\n");
+  fflush(stdout);
+
+  /* boardctl 之后再打方波：开机 HAL/时钟才就绪；不依赖 COM7 NSH。 */
+  alert_buzzer_selftest();
+
+  for (;;) {
+    uint32_t idle = lv_timer_handler();
+    idle = idle ? idle : 1;
+    usleep(idle * 1000);
+  }
+#else
+  {
+    uint16_t blue = rgb565(0, 80, 200);
+    if (fb_fill_color(blue, NULL) == 0) {
+      printf("[alert_lcd] boot splash (ready, no LVGL)\n");
+    }
+    alert_buzzer_selftest();
+  }
+#endif
 #endif
 }
 

@@ -18,3 +18,7 @@ out/
 *.elf
 *.hex
 *.map
+
+# Local Wi-Fi secrets (never commit SSID/password)
+app/edge_walker/ew_wifi_secret.h
+VMware_share/mailbox/host_to_guest/wifi_join.txt

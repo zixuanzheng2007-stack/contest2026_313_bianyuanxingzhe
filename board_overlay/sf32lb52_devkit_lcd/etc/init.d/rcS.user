@@ -1,0 +1,2 @@
+echo rcS_start > /dev/console
+ew boot
