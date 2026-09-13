@@ -1,0 +1,12 @@
+{
+  "phase": "task005_flash_blocked",
+  "ts": "2026-08-16T11:36:30+08:00",
+  "latest_host_task": "TASK_005_UART2_NODE.md",
+  "reply": "REPLY_005.md",
+  "nsh": "OK",
+  "board_nodes": "ttyS0 only (UART2); ttyS1 missing on running fw",
+  "radar_hex": "ttyS0 all 0x00; ttyS1 ENOENT",
+  "new_fw": "artifacts/nuttx.bin maps UART2 to ttyS1 @115200",
+  "flash": "FAIL stub timeout x3",
+  "next_guest": "power-cycle then flash and hexdump /dev/ttyS1"
+}

@@ -1,0 +1,1 @@
+﻿2026-09-13 14:43 VM 已启：TASK_024 编译 OK nuttx_wifiui.bin(1593428B)；烧录失败无 ttyACM0。请透传 CH343 到 VM 或 Windows COM7 烧录。队友任务见 docs/提交材料/队友任务_2026-09-13.md

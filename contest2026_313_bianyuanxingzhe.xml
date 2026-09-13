@@ -9,8 +9,8 @@
   <include name="openvela.xml"/>
 
   <project path="contest2026_313_bianyuanxingzhe" name="contest2026_313_bianyuanxingzhe">
-    <linkfile src="app/hello_app" dest="packages/demos/contest2026_313_hello_app"/>
     <linkfile src="app/edge_walker" dest="packages/demos/contest2026_313_edge_walker"/>
+    <linkfile src="app/hello_app" dest="packages/demos/contest2026_313_hello_app"/>
     <linkfile src="quickapp/hello_quickapp" dest="packages/apps/contest2026_313_hello_quickapp"/>
     <linkfile src="board/contest_board" dest="vendor/openvela/boards/contest2026_313_board"/>
   </project>
