@@ -1,0 +1,17 @@
+SSH 已在 Ubuntu 虚拟机配置完成
+时间: 2026-08-12 10:17:19
+
+用户名: a1
+IP: 192.168.126.128
+端口: 22
+公钥: 已写入 ~/.ssh/authorized_keys（windows_host.pub）
+服务: openssh-server active / enabled
+
+主机测试命令 (PowerShell):
+  ssh -i $env:USERPROFILE\.ssh\id_ed25519_openvela_vm a1@192.168.126.128
+
+或:
+  ssh -i %USERPROFILE%\.ssh\id_ed25519_openvela_vm a1@192.168.126.128
+
+whoami: a1
+hostname -I: 192.168.126.128 

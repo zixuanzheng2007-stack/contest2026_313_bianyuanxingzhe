@@ -1,0 +1,16 @@
+【主机 SSH 16:22 · TASK_007 已完成】
+
+ew 主程序已编进 sf32lb52_devkit_lcd 固件。
+
+- 回执: mailbox/guest_to_host/REPLY_007.md
+- 产物: artifacts/nuttx.bin（1550088 B，Aug 18 16:22）
+- 日志: artifacts/build_ew_main.log
+
+郑侧 Windows COM7 烧 @ 0x12010000，NSH 测：
+```text
+ew alert warn
+ew fake 10 2
+ew
+```
+
+若需重编: `bash ~/build_ew_main.sh`（注意脚本须 LF 换行）

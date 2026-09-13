@@ -1,36 +1,48 @@
-# contest2026_313_bianyuanxingzhe
+# 边缘行者（Bian Yuan Xing Zhe）
 
-👋 欢迎参加 **2026 首届 openvela AI 硬件开发者大赛**！
+队伍专属仓：`contest2026_313_bianyuanxingzhe` · 截止 **2026-09-20**
 
-这是组委会为你的队伍创建的**专属参赛仓库**（本仓为样例/模板，队伍编号 `313`；你看到的将是你自己的 `contest2026_<编号>_<队伍名>`）。比赛期间，你的全部参赛代码、打包产物与 AI Coding 日志都提交到这里。
+## 一、作品简介
 
-> 本仓既是「代码仓」，又内置了一键拉取整套 openvela 工程的 `repo` 清单（manifest）。你只需跟它打交道，**自始至终只动一个文件夹**。
+面向骑行/步行场景的**后方来车接近预警**原型：毫米波雷达感知接近目标，在 **SF32LB52-DevKit-LCD（openvela）** 上完成本地解析与门限决策，并给出可感知告警（蜂鸣 / LCD / LED 等，输出抽象为 `alert_output`）。
 
----
+最小闭环：
 
-## 一、先读这些官方文档
+```text
+LD2451 ──UART──► 板端解析 + 本地门限决策 ──► alert_output（可感知响应）
+```
 
-**通用（所有赛道必读）：**
+初赛 MVP 双线：① LD2451→板端门限→`alert_output`；② openvela **ai_agent** 上板 + ≥1 Skill + ≥1「主动+执行」（接近触发告警 Tool）。测距不靠 LLM。分工见 `docs/分工/`。
 
-| 文档                                                                                                                                     | 用途                                           |
-| ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| [《大赛总览》](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/contest_overview.md)                        | 赛道、流程、评分、资源，建议先通读             |
-| [《参赛代码提交指南》](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/code_submission_guide.md)           | 仓库获取、提交流程、时间与权限（**以此为准**） |
-| [《AI Coding 日志归集与提交手册》](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/ai_coding_log_guide.md) | 如何导出 AI 对话日志并提交到 `logs/`           |
+## 二、选题方向
 
-**按你的赛道选读（三选一）：**
+**AI 硬件产品创新**（参考官方指南，非排他命题）。
 
-| 赛道                  | 教程导航                                                                                                                                                 |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 快应用 / 手表应用创新 | [快应用教程导航](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/quickapp/quickapp_guide_index.md)                         |
-| AI 硬件产品创新       | [AI 硬件赛道教程导航](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/ai_hardware/ai_hardware_guide_index.md)              |
-| 新硬件适配            | [新硬件适配赛道教程导航](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/hardware_porting/hardware_porting_guide_index.md) |
+理由：真实边缘感知 + 板端门限 + ai_agent「主动告警执行」，贴近腰戴安全产品，并满足赛道 Agent 硬性要求。
 
----
+## 三、目录结构
 
-## 二、第一步：拉取完整工程
+```text
+contest2026_313_bianyuanxingzhe/
+├── README.md                 # 本作品说明（评委入口）
+├── contest2026_313_bianyuanxingzhe.xml / openvela.xml
+├── app/edge_walker/          # ★ 板端主应用（NSH 命令 ew）
+├── app/hello_app/            # 模板骨架（保留）
+├── board_overlay/sf32lb52_devkit_lcd/  # rcS.user → ew boot
+├── board/contest_board/      # 模板板级骨架
+├── quickapp/hello_quickapp/  # 快应用模板（本作品暂不依赖）
+├── docs/                     # 方案、选型、接线、分工、冒烟记录
+├── scripts/                  # Windows 检测/冒烟/烧录辅助脚本
+├── tools/                    # 本机工具缓存（驱动/雷达APP/sftool；大文件默认不入仓）
+└── logs/                     # AI Coding 日志（必须提交）
+    └── zixuanzheng2007-stack/
+```
 
-用组委会提供的命令一键拉取「openvela 全量源码 + 你的专属仓」：
+详细文档索引见 [`docs/00_提交材料索引.md`](docs/00_提交材料索引.md)。
+
+## 四、运行方式
+
+### 1. 拉取 openvela 全量工程（Ubuntu 22.04 推荐）
 
 ```bash
 repo init -u https://github.com/open-vela/contest2026_313_bianyuanxingzhe \
@@ -38,111 +50,104 @@ repo init -u https://github.com/open-vela/contest2026_313_bianyuanxingzhe \
 repo sync -c -j8
 ```
 
-同步后，你的整个仓库位于工作区的 `contest2026_313_bianyuanxingzhe/`，openvela 全量源码在外层（`nuttx/`、`apps/`、`packages/`、`vendor/` 等）。
+同步后：本仓位于工作区 `contest2026_313_bianyuanxingzhe/`，全量源码在外层（`nuttx/`、`apps/`、`vendor/` 等）。
 
----
+### 2. 编译目标板
 
-## 三、第二步：在哪里写代码
+`repo sync` 后 `app/edge_walker` 通过 manifest 链到  
+`packages/demos/contest2026_313_edge_walker`。
 
-**只在自己的仓目录 `contest2026_313_bianyuanxingzhe/` 里开发。** 不同作品形态放在对应子目录，manifest 会通过 `<linkfile>` 把它们**软链**到 openvela 编译树该在的位置——你不用手动 copy：
-
-| 作品形态 | 你的代码放这里             | 系统自动映射到                                 |
-| -------- | -------------------------- | ---------------------------------------------- |
-| 应用     | `app/hello_app/`           | `packages/demos/contest2026_313_hello_app`     |
-| 快应用   | `quickapp/hello_quickapp/` | `packages/apps/contest2026_313_hello_quickapp` |
-| 板级适配 | `board/contest_board/`     | `vendor/openvela/boards/contest2026_313_board` |
-
-> 用不到的形态目录可以删掉；新增作品时按同样规则加子目录，并在 `contest2026_313_bianyuanxingzhe.xml` 里补一条 `<linkfile>` 映射即可。**生产仓库（packages/nuttx/vendor 等）零改动。**
-
-建议仓库目录约定（便于评委定位）：
-
-```text
-app/ | quickapp/ | board/   # 你的作品代码
-logs/                       # AI Coding 日志（主动导出后提交，格式见 logs/README.md）
-README.md                   # 作品说明（提交前请改成你自己的，见第六节）
-```
-
-> 仓内附带了一个 `.gitignore.example`，给出了**编译产物**等不需要进仓的文件示例。如需启用，`cp .gitignore.example .gitignore` 后按需增删即可。**注意 `logs/` 下最终导出的 AI Coding 日志必须提交，不要忽略。**
->
-> `logs/` 的目录结构与提交格式见 [logs/README.md](logs/README.md)。
-
----
-
-## 四、第三步：编译与运行
-
-编译/运行步骤随作品形态不同而不同，请参考你所在赛道的教程导航：
-
-- 快应用 / 手表应用：[快应用教程导航](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/quickapp/quickapp_guide_index.md)（含模拟器与开发板部署）。
-- AI 硬件产品创新：[AI 硬件赛道教程导航](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/ai_hardware/ai_hardware_guide_index.md)（环境搭建、编译烧录、Skill 开发）。
-- 新硬件适配：[新硬件适配赛道教程导航](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/hardware_porting/hardware_porting_guide_index.md)（BSP 移植、最小 NSH 基线）。
-
-子目录已通过 manifest 中的 `<linkfile>` 软链进 openvela 编译树，因此构建在 openvela 工作区**根目录**（即你这个仓的上一级）进行。openvela 使用 `build.sh` 作为统一入口，接收一个 **board config 路径**作为参数：
+在 openvela 工作区根目录：
 
 ```bash
-# 进入 openvela 工作区根目录（你的仓的上一级）
-cd ..
+# menuconfig 中打开：
+#   Contest 2026 team 313 edge_walker
+#   LVGL / FreeType（若需 Agent 中文）
 
-# 通用语法：第一个参数是 board config 路径，第二个参数可以是 menuconfig / distclean 等
-./build.sh <board-config-path> [menuconfig|distclean] [-j8]
+./build.sh vendor/sifli/boards/sf32lb52_devkit_lcd --cmake -j8
+# 路径以 vendor 实际目录为准；亦可用已配置的 cmake_out 增量：
+# ninja -C cmake_out/sf32lb52_devkit_lcd
 ```
 
-> 具体的 board config 路径、目标产物、模拟器/真机部署方式请以你所在赛道的教程导航为准。本仓 `app/` `quickapp/` `board/` 三个示例骨架对应的 Kconfig 选项可通过 `menuconfig` 启用。
+产物：`cmake_out/sf32lb52_devkit_lcd/nuttx.bin`，烧录地址 **`0x12010000`**。
 
----
+### 3. 烧录（Windows 真机站）
 
-## 五、第四步：提交作品
+- 接口：DevKit **USB-to-UART**（CH343），本机当前枚举为 **COM7**
+- 工具：`tools/sftool/sftool.exe` 或思澈 Impeller（Interface=UART）
 
-1. **fork** 你的专属仓 → 开发 → `git commit` 并推送 → 向专属仓发起 **Pull Request**，可**自行 review 并合入**（无需等组委会）。
-2. **AI Coding 日志**：与 AI 工具的对话会自动记录到本机 staging（不会自动上传），需你**主动导出/打包**选定会话到仓内 `logs/` 目录后一并提交。详见[《AI Coding 日志归集与提交手册》](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/ai_coding_log_guide.md)。
-3. 若需改动 **nuttx 等公共仓库**，不在本仓改，而是 fork 对应公共仓、以 PR 提交到 `dev-ai-contest-2026` 分支，由组委会 review 后合入。
-
-> ⏰ **提交作品截止：9 月 20 日**。截止后统一收回 push 权限，仍可查看 / clone。
->
-> 获奖后再按要求将作品 PR 至 openvela 上游对应仓库（走标准 PR + CI 流程）。
-
-### 关于 PR 与 CLA
-
-- 本仓所有改动通过 **Pull Request** 合入（分支保护强制，可自行合入自己的 PR）。
-- 首次贡献需在[**官网签署 CLA**](https://openvela.com/#/community/cla)；PR 上会自动跑 `cla/signature` 检查，在官网签署成功后，在 PR 评论 `/check-cla` 复检即可通过。
-
----
-
-## 六、提交前：把本 README 改成你的作品说明
-
-本文件目前是组委会给的**使用说明书**。**作品提交前，请把它替换成你自己作品的说明**，方便评委快速了解你做了什么、怎么跑起来。建议至少包含以下内容：
-
-```markdown
-# <你的作品名>
-
-## 一、作品简介
-<一句话/一段话说明这个作品是什么、解决什么问题、亮点在哪>
-
-## 二、选题方向
-<快应用 / 手表应用创新 ｜ AI 硬件产品创新 ｜ 新硬件适配 ｜ 自定方向，并简述理由>
-
-## 三、目录结构
-<列出你这个仓里各目录/文件的作用，例如：>
-- `app/xxx/`        — <说明>
-- `board/xxx/`      — <说明>
-- `quickapp/xxx/`   — <说明>
-- `logs/`           — AI Coding 日志
-- `docs/` 或其他    — <说明>
-
-## 四、运行方式
-<拉取工程后，如何编译、烧录/部署、运行的完整步骤；最好能让评委照着一步步复现>
-
-## 五、AI Coding 使用说明
-<说明本作品如何借助 AI 辅助开发：
-- 在需求拆解 / 方案设计 / 编码 / 调试 / 文档等环节如何与 AI 协作；
-- AI 对开发效率或质量带来的实际帮助。
-完整对话日志见 logs/ 目录>
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\flash_sf32.ps1 `
+  -Port COM7 -Firmware "nuttx.bin@0x12010000"
 ```
 
-> 提示：将会根据「作品本身 + 你的 README 说明 + `logs/` 里的 AI Coding 日志」来理解和评估你的作品，README 写清楚很重要。
+等价：
 
----
+```text
+sftool -c SF32LB52 -p COM7 -b 1000000 write_flash nuttx.bin@0x12010000
+```
 
-## 附：仓库命名规范
+### 4. 雷达接线（LD2451）
 
-`contest2026_<编号>_<队伍名>` — 编号三位零填充；队名 slug（全小写、英文/拼音、连字符）。例：`contest2026_313_bianyuanxingzhe`。
-（仓库由组委会统一创建，**每队仅一个仓**，无需自行命名。）
+- VIN→5V，GND→GND，TX↔RX 交叉接板端业务 UART（勿占用 Debug UART）
+- 手机 **HLKRadarTool** 可先蓝牙验活；量产路径以 UART 协议解析为准
+
+更细的接线见 [`docs/三款毫米波雷达综合选型与接线手册.md`](docs/三款毫米波雷达综合选型与接线手册.md)。
+
+### 5. 板上演示（评委 / 录像）
+
+上电自动进入预警页（`ew boot`）。完整分镜见  
+[`docs/提交材料/Demo脚本与验收步骤.md`](docs/提交材料/Demo脚本与验收步骤.md)。
+
+**最小验收（30 秒）：**
+
+```text
+# 串口 COM7 @ 1Mbps，RTS/DTR 关
+ew alert soft      → 橙屏 + 蜂鸣
+ew alert crit      → 红屏 + 高频蜂鸣
+ew alert none      → 回 EW READY
+```
+
+**雷达实机：** 后方靠近 → 橙/红 + 蜂鸣 → 离开约 1s 恢复（**断网仍可用**）。
+
+**智能体：** 点 **Agent** → 快捷句「Who are you?」/「告警怎么工作」；NSH：`ew ask <问题>`（需 WiFi）。
+
+| 模块 | 负责人 |
+|------|--------|
+| 主程序 / 预警 UI / 蜂鸣 / WiFi | 郑子轩 |
+| LD2451 数据与策略 | 王筠昊 |
+| Agent 对话 / LLM / Skill+Tool | 韦政宇 |
+
+**赛题 Agent（已实现）：** `ew boot` 安装 Skill `approach-warn`（`/data/ai_agent/skills/`），雷达越限经 `ew_agent_proactive_alert` → Tool `approach_alert` → `alert_output()`。演示：`ew fake 10 20`，串口见 `[ew_agent]`、`[alert_output]`。详见 [`app/edge_walker/README.md`](app/edge_walker/README.md)。
+
+**提交进度：** 代码在 [`feature/host-edge-walker`](https://github.com/zixuanzheng2007-stack/contest2026_313_bianyuanxingzhe/tree/feature/host-edge-walker) → [PR #4](https://github.com/open-vela/contest2026_313_bianyuanxingzhe/pull/4) 合入 `dev-ai-contest-2026`（CLA ✅）。技术报告见 [`docs/提交材料/边缘行者_技术报告_V1.0.md`](docs/提交材料/边缘行者_技术报告_V1.0.md)。
+
+## 六、AI Coding 使用说明
+
+本阶段主要使用 **Cursor Agent** 完成：赛题解读、硬件选型、仓库/PR/CLA、文档精简、雷达与串口冒烟、sftool 连通 SF32、提交材料整理等。
+
+| 会话 | 说明 |
+|------|------|
+| `6e5f1783-…` | openvela **母目录**会话：竞赛页/硬件资料与选型分析（2026-07-19 起） |
+| `c06c0b41-…` | 专属仓 fork / `dev-ai-contest-2026` 分支确认 |
+| `df773b3a-…` | 主开发会话：方案、文档、雷达、板端检测烧录至提交整理 |
+
+完整对话见 [`logs/zixuanzheng2007-stack/`](logs/zixuanzheng2007-stack/)：
+
+- 转换后的竞赛 schema JSONL：`cursor__<sid>.jsonl`
+- **原始 Cursor transcript**：同日目录下 `raw/<sid>.jsonl`
+
+> **合规说明**：官方自动采集工具支持 Claude Code / OpenCode / Codex / AIoT-IDE。Cursor 不在官方自动采集列表。本仓已将 Cursor 全过程原始日志按手册 schema **手工归档**，便于评委追溯。完成 `repo sync` 后请安装 `contest-log-collector`，后续优先在官方支持工具内开发，使有效工时自动入仓。
+
+## 七、官方必读（组委会）
+
+| 文档 | 用途 |
+|------|------|
+| [大赛总览](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/contest_overview.md) | 赛道、流程、评分 |
+| [参赛代码提交指南](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/code_submission_guide.md) | 仓库与 PR |
+| [AI Coding 日志手册](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/ai_coding_log_guide.md) | `logs/` 格式 |
+| [AI 硬件赛道教程](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/ai_hardware/ai_hardware_guide_index.md) | 编译烧录 / Agent / Skill |
+
+提交方式：fork → PR 回专属仓 → 自行合入；首次贡献需签署 [CLA](https://openvela.com/#/community/cla)。
+
+**开源协议：** 本作品遵循 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0)（与 openvela 生态一致）。

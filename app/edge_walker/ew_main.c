@@ -1,23 +1,17 @@
 /****************************************************************************
- * 边缘行者主程序（NSH 命令 `ew`）
+ * 边缘行者主程序（郑子轩）
  *
- * 分工：
- *   F：parse / fixture / fake 走 LD2451 解析 + policy
- *   H：alert_output / LCD；真机 UART 读环
- *
- * 无雷达时可测：
- *   ew parse | ew fixture soft|strong|emergency|away | ew fake 20 30
- * 有雷达后：
- *   ew                 # 读 /dev/ttyS1 @115200
- *
- * 控制台口是主机 USB 1Mbps（RTS 须拉低）；雷达口是板上 UART2。
+ * 用法见 `ew help`。板子上由 rcS 启动 `ew boot`，其余子命令只用于台架调试。
  ****************************************************************************/
 
-#include "alert_lcd.h"
 #include "alert_output.h"
 #include "alert_buzzer.h"
+#include "alert_lcd.h"
+#include "ew_chat.h"
 #include "ew_ld2451.h"
+#include "ew_llm.h"
 #include "ew_wifi_at.h"
+#include "ew_agent.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,80 +19,9 @@
 
 #ifdef __NuttX__
 #include <fcntl.h>
+#include <time.h>
 #include <unistd.h>
-#include <termios.h>
 #endif
-
-#ifndef EW_RADAR_DEV
-#define EW_RADAR_DEV "/dev/ttyS1"
-#endif
-
-/* HLK V1.03 文档示例帧（3 目标；含靠近与远离） */
-static const uint8_t k_official_example[] = {
-  0xF4, 0xF3, 0xF2, 0xF1,
-  0x11, 0x00,
-  0x03, 0x01,
-  0x8A, 0x28, 0x00, 0x3C, 0x15, /* 10°, 40m, approach, 60km/h */
-  0x8A, 0x1E, 0x01, 0x3C, 0x0F, /* 10°, 30m, away, 60km/h */
-  0x76, 0x5F, 0x00, 0x3C, 0x0F, /* -10°, 95m, approach, 60km/h */
-  0xF8, 0xF7, 0xF6, 0xF5
-};
-
-static void build_single_target_frame(uint8_t *out, unsigned *out_len,
-                                      uint8_t angle_raw, uint8_t range_m,
-                                      uint8_t dir, uint8_t speed_kmh,
-                                      uint8_t snr)
-{
-  /* 头 + 长度 7 + 体(count/alarm/5B) + 尾 */
-  out[0] = 0xF4;
-  out[1] = 0xF3;
-  out[2] = 0xF2;
-  out[3] = 0xF1;
-  out[4] = 0x07;
-  out[5] = 0x00;
-  out[6] = 0x01;
-  out[7] = (dir == (uint8_t)EW_DIR_APPROACH) ? 0x01 : 0x00;
-  out[8] = angle_raw;
-  out[9] = range_m;
-  out[10] = dir;
-  out[11] = speed_kmh;
-  out[12] = snr;
-  out[13] = 0xF8;
-  out[14] = 0xF7;
-  out[15] = 0xF6;
-  out[16] = 0xF5;
-  *out_len = 17;
-}
-
-static void print_decision(const ew_track_t *t, const ew_decision_t *d)
-{
-  printf("[ew] track range=%.1fm speed=%.1fkm/h az=%.0f° ttc=%.2fs "
-         "approaching=%d -> %s (%s)\n",
-         t->range_m, t->speed_kmh, t->azimuth_deg, t->ttc_s,
-         (int)t->approaching,
-         ew_alert_level_name(d->level), d->reason);
-}
-
-static int feed_and_decide(const uint8_t *frame, unsigned len)
-{
-  ew_track_t track;
-  ew_decision_t d;
-  bool got;
-
-  ew_ld2451_reset();
-  memset(&track, 0, sizeof(track));
-  got = ew_ld2451_feed(frame, len, &track);
-  if (!got || !track.valid) {
-    printf("[ew] parse: no valid approaching target\n");
-    alert_output(EW_ALERT_NONE, "no_valid_target");
-    return 1;
-  }
-
-  d = ew_decide(&track);
-  print_decision(&track, &d);
-  alert_output(d.level, d.reason);
-  return 0;
-}
 
 static int cmd_alert(int argc, char **argv)
 {
@@ -108,17 +31,12 @@ static int cmd_alert(int argc, char **argv)
   if (argc >= 3) {
     if (strcmp(argv[2], "none") == 0 || strcmp(argv[2], "0") == 0) {
       level = EW_ALERT_NONE;
-    } else if (strcmp(argv[2], "soft") == 0 || strcmp(argv[2], "warn") == 0 ||
-               strcmp(argv[2], "1") == 0) {
-      level = EW_ALERT_SOFT;
     } else if (strcmp(argv[2], "strong") == 0 || strcmp(argv[2], "2") == 0) {
       level = EW_ALERT_STRONG;
-    } else if (strcmp(argv[2], "emergency") == 0 ||
-               strcmp(argv[2], "crit") == 0 || strcmp(argv[2], "3") == 0) {
+    } else if (strcmp(argv[2], "crit") == 0 || strcmp(argv[2], "3") == 0) {
       level = EW_ALERT_EMERGENCY;
     } else {
-      printf("[ew] unknown level '%s'\n", argv[2]);
-      return 1;
+      level = EW_ALERT_SOFT;
     }
   }
   if (argc >= 4) {
@@ -129,6 +47,23 @@ static int cmd_alert(int argc, char **argv)
   return 0;
 }
 
+static int cmd_buzz(int argc, char **argv)
+{
+  unsigned freq = (argc >= 3) ? (unsigned)atoi(argv[2]) : 2500u;
+  unsigned ms = (argc >= 4) ? (unsigned)atoi(argv[3]) : 800u;
+
+  printf("[ew] buzz PA28 (40P.23)\n");
+  return alert_buzzer_beep(freq, ms);
+}
+
+static int cmd_screen(int argc, char **argv)
+{
+  if (argc >= 3 && strcmp(argv[2], "info") == 0) {
+    return alert_lcd_info();
+  }
+  return alert_lcd_selftest();
+}
+
 static int cmd_fake(int argc, char **argv)
 {
   ew_track_t t;
@@ -136,64 +71,92 @@ static int cmd_fake(int argc, char **argv)
 
   memset(&t, 0, sizeof(t));
   t.valid = true;
-  t.range_m = (argc >= 3) ? (float)atof(argv[2]) : 20.0f;
-  t.speed_kmh = (argc >= 4) ? (float)atof(argv[3]) : 30.0f;
-  t.azimuth_deg = 0.0f;
+  t.range_m = (argc >= 3) ? (float)atof(argv[2]) : 10.0f;
+  t.speed_kmh = (argc >= 4) ? (float)atof(argv[3]) : 20.0f;
+  t.snr = 30.0f;
   t.approaching = (t.speed_kmh > 0.0f);
-  if (t.approaching && t.speed_kmh > 0.0f) {
-    t.ttc_s = t.range_m / (t.speed_kmh / 3.6f);
-  } else {
-    t.ttc_s = -1.0f;
-    t.approaching = false;
-  }
+  t.ttc_s = t.approaching ? (t.range_m / (t.speed_kmh / 3.6f)) : -1.0f;
 
   d = ew_decide(&t);
-  print_decision(&t, &d);
+  printf("[ew] fake range=%.1fm speed=%.1f approaching=%d -> %s\n",
+         t.range_m, t.speed_kmh, (int)t.approaching, d.reason);
   alert_output(d.level, d.reason);
   return 0;
 }
 
-static int cmd_parse(void)
+static int cmd_wifi(int argc, char **argv)
 {
-  printf("[ew] parse official V1.03 example frame\n");
-  return feed_and_decide(k_official_example, sizeof(k_official_example));
-}
+  static const char *state_name[] = {
+    "modem not responding", "not connected", "connected (LAN only)", "online"
+  };
+  char status[EW_WIFI_STAT_MAX];
+  const char *sub = (argc >= 3) ? argv[2] : "";
 
-static int cmd_fixture(int argc, char **argv)
-{
-  uint8_t frame[32];
-  unsigned len = 0;
-  const char *name = (argc >= 3) ? argv[2] : "strong";
+  if (strcmp(sub, "scan") == 0) {
+    ew_wifi_ap_t aps[EW_WIFI_SCAN_MAX];
+    int n = ew_wifi_scan(aps, EW_WIFI_SCAN_MAX);
+    int i;
 
-  if (strcmp(name, "empty") == 0) {
-    frame[0] = 0xF4;
-    frame[1] = 0xF3;
-    frame[2] = 0xF2;
-    frame[3] = 0xF1;
-    frame[4] = 0x02;
-    frame[5] = 0x00;
-    frame[6] = 0x00;
-    frame[7] = 0x00;
-    frame[8] = 0xF8;
-    frame[9] = 0xF7;
-    frame[10] = 0xF6;
-    frame[11] = 0xF5;
-    len = 12;
-  } else if (strcmp(name, "away") == 0) {
-    build_single_target_frame(frame, &len, 0x80, 12, (uint8_t)EW_DIR_AWAY, 40, 20);
-  } else if (strcmp(name, "soft") == 0) {
-    /* 22 m @ 20 km/h → SOFT by range */
-    build_single_target_frame(frame, &len, 0x80, 22, (uint8_t)EW_DIR_APPROACH, 20, 30);
-  } else if (strcmp(name, "emergency") == 0) {
-    build_single_target_frame(frame, &len, 0x80, 6, (uint8_t)EW_DIR_APPROACH, 40, 40);
-  } else {
-    /* strong: 12 m @ 25 km/h */
-    build_single_target_frame(frame, &len, 0x80, 12, (uint8_t)EW_DIR_APPROACH, 25, 35);
-    name = "strong";
+    if (n < 0) {
+      printf("[ew-wifi] scan failed\n");
+      return 1;
+    }
+    for (i = 0; i < n; i++) {
+      printf("  %-32s %4d dBm  %s\n", aps[i].ssid, aps[i].rssi,
+             aps[i].open ? "open" : "locked");
+    }
+    printf("[ew-wifi] %d network(s)\n", n);
+    return 0;
   }
 
-  printf("[ew] fixture '%s' (%u bytes)\n", name, len);
-  return feed_and_decide(frame, len);
+  if (strcmp(sub, "join") == 0) {
+    int rc;
+
+    if (argc < 4) {
+      printf("usage: ew wifi join <ssid> [password]\n");
+      return 1;
+    }
+    rc = ew_wifi_join(argv[3], (argc >= 5) ? argv[4] : "", status,
+                      sizeof(status));
+    printf("[ew-wifi] %s\n", status);
+    return rc;
+  }
+
+  if (strcmp(sub, "forget") == 0) {
+    return ew_wifi_forget();
+  }
+
+  if (strcmp(sub, "ping") == 0) {
+    return ew_wifi_at_ping();
+  }
+
+  if (strcmp(sub, "raw") == 0) {
+    return ew_wifi_at_status();
+  }
+
+  {
+    char ip[24];
+    ew_wifi_state_t st = ew_wifi_probe(1, ip, sizeof(ip));
+
+    printf("[ew-wifi] %s%s%s\n", state_name[st], ip[0] ? "  ip=" : "", ip);
+    if (ew_wifi_cred_load(status, sizeof(status), NULL, 0) == 0) {
+      printf("[ew-wifi] saved ssid: %s\n", status);
+    }
+    return (st == EW_WIFI_DOWN) ? 1 : 0;
+  }
+}
+
+static int cmd_ask(int argc, char **argv)
+{
+  char reply[512];
+  const char *q = (argc >= 3) ? argv[2] : "你好";
+
+  if (ew_llm_ask(q, reply, sizeof(reply)) != 0) {
+    printf("[ew-ask] fail: %s\n", reply);
+    return 1;
+  }
+  printf("[ew-ask] %s\n", reply);
+  return 0;
 }
 
 static int cmd_loop(void)
@@ -201,139 +164,120 @@ static int cmd_loop(void)
 #ifdef __NuttX__
   uint8_t buf[64];
   ew_track_t track;
-  int fd = open(EW_RADAR_DEV, O_RDONLY | O_NONBLOCK);
+  ew_hold_t hold;
+  ew_sniff_stats_t sniff;
+  ew_alert_level_t last = EW_ALERT_NONE;
+  int fd = open(EW_RADAR_DEV, O_RDONLY);
+
   if (fd < 0) {
     printf("[ew] open %s failed\n", EW_RADAR_DEV);
     return 1;
   }
 
-  {
-    struct termios tio;
-    if (tcgetattr(fd, &tio) == 0) {
-      cfsetispeed(&tio, B115200);
-      cfsetospeed(&tio, B115200);
-      tio.c_cflag = CS8 | CLOCAL | CREAD;
-      tio.c_iflag = 0;
-      tio.c_oflag = 0;
-      tio.c_lflag = 0;
-      tcsetattr(fd, TCSANOW, &tio);
-    }
-  }
+  ew_hold_reset(&hold);
+  memset(&sniff, 0, sizeof(sniff));
+  printf("[ew] reading %s, Ctrl-C to stop\n", EW_RADAR_DEV);
 
-  ew_ld2451_reset();
-  printf("[ew] reading %s @115200, Ctrl-C to stop\n", EW_RADAR_DEV);
   for (;;) {
+    ew_sniff_stats_t before = sniff;
+    const ew_track_t *tp = NULL;
+    bool had_bytes = false;
+    bool had_frame = false;
+    ew_decision_t d;
+    struct timespec ts;
+    uint32_t now = 0;
     int n = read(fd, buf, sizeof(buf));
-    if (n <= 0) {
-      usleep(20000);
-      continue;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+      now = (uint32_t)((uint64_t)ts.tv_sec * 1000u +
+                       (uint64_t)ts.tv_nsec / 1000000u);
     }
-    if (ew_ld2451_feed(buf, (unsigned)n, &track) && track.valid) {
-      ew_decision_t d = ew_decide(&track);
-      print_decision(&track, &d);
-      alert_output(d.level, d.reason);
+
+    if (n > 0) {
+      had_bytes = true;
+      memset(&track, 0, sizeof(track));
+      if (ew_ld2451_feed_sniff(buf, (unsigned)n, &sniff, &track) &&
+          track.valid) {
+        tp = &track;
+      }
+      had_frame = (sniff.frames_ok > before.frames_ok);
+    } else {
+      usleep(20000);
+    }
+
+    d = ew_hold_update(&hold, now, had_bytes, had_frame, tp);
+    if (d.level != last) {
+      printf("[ew] latch %s range=%.1fm %s link=%d\n",
+             ew_alert_level_name(d.level), d.range_m, d.reason, (int)d.link);
+      ew_agent_proactive_alert(d.level, d.range_m, d.reason);
+      last = d.level;
     }
   }
 #else
-  printf("[ew] host stub: try `ew parse` / `ew fixture soft` / `ew fake 20 30`\n");
+  printf("[ew] host stub: try `ew fake 10 2` or `ew alert soft`\n");
 #endif
   return 0;
 }
 
-static int cmd_buzz(int argc, char **argv)
-{
-  unsigned freq = 2500;
-  unsigned ms = 800;
-
-  if (argc >= 3) {
-    freq = (unsigned)atoi(argv[2]);
-  }
-  if (argc >= 4) {
-    ms = (unsigned)atoi(argv[3]);
-  }
-  printf("[ew] buzz test VCC=40P.2 GND=40P.14 IO=PA28/40P.23\n");
-  return alert_buzzer_beep(freq, ms);
-}
-
-static int cmd_wifi(int argc, char **argv)
-{
-  if (argc >= 3 && strcmp(argv[1], "wifi") == 0 && strcmp(argv[2], "ping") == 0) {
-    return ew_wifi_at_ping();
-  }
-  if (argc >= 3 && strcmp(argv[1], "at") == 0) {
-    return ew_wifi_at_cmd(argv[2]);
-  }
-  return ew_wifi_at_ping();
-}
-
-static void print_help(void)
+static int cmd_help(void)
 {
   printf("usage:\n");
-  printf("  ew                         read radar on %s\n", EW_RADAR_DEV);
-  printf("  ew alert soft|strong|emergency|none [reason]\n");
-  printf("  ew fake [range_m] [speed_kmh]\n");
-  printf("  ew parse                    decode official example frame\n");
-  printf("  ew fixture soft|strong|emergency|away|empty\n");
-  printf("  ew lcd info|selftest|boot\n");
-  printf("  ew boot                    LVGL splash + PA28 buzzer selftest\n");
-  printf("  ew buzz [freq_hz] [ms]     passive buzzer on PA28 (40P.23)\n");
-  printf("  ew at [CMD]                ESP AT on /dev/ttyS2 (PA24/25, 115200)\n");
-  printf("  ew wifi ping               send AT, expect OK\n");
-}
-
-static int cmd_lcd(int argc, char **argv)
-{
-  if (argc < 3) {
-    return alert_lcd_info();
-  }
-  if (strcmp(argv[2], "selftest") == 0) {
-    return alert_lcd_selftest();
-  }
-  if (strcmp(argv[2], "boot") == 0) {
-    alert_lcd_boot_splash();
-    return 0;
-  }
-  return alert_lcd_info();
+  printf("  ew                          read radar on %s\n", EW_RADAR_DEV);
+  printf("  ew boot                     LVGL UI loop (used by rcS)\n");
+  printf("  ew chat                     jump straight to the agent page\n");
+  printf("  ew alert none|soft|strong|crit [reason]\n");
+  printf("  ew fake [range_m] [speed]   feed a synthetic target\n");
+  printf("  ew buzz [freq_hz] [ms]      PA28 passive buzzer\n");
+  printf("  ew screen [info]            LCD colour selftest / resolution\n");
+  printf("  ew wifi                     link state + saved ssid\n");
+  printf("  ew wifi scan                list nearby networks\n");
+  printf("  ew wifi join <ssid> [pass]  connect and remember\n");
+  printf("  ew wifi forget              drop saved credentials\n");
+  printf("  ew wifi ping|raw            AT handshake / CWJAP?+CIFSR\n");
+  printf("  ew at <cmd>                 raw AT, e.g. ew at AT+CIFSR\n");
+  printf("  ew ask <text>               one-shot LLM question\n");
+  return 0;
 }
 
 int main(int argc, char *argv[])
 {
-  printf("edge_walker (F parse/policy + H alert)\n");
-  printf("  radar dev: %s\n", EW_RADAR_DEV);
+  const char *cmd = (argc >= 2) ? argv[1] : "";
 
-  if (argc >= 2 && strcmp(argv[1], "alert") == 0) {
+  if (strcmp(cmd, "alert") == 0) {
     return cmd_alert(argc, argv);
   }
-  if (argc >= 2 && strcmp(argv[1], "fake") == 0) {
+  if (strcmp(cmd, "fake") == 0) {
     return cmd_fake(argc, argv);
   }
-  if (argc >= 2 && strcmp(argv[1], "parse") == 0) {
-    return cmd_parse();
+  if (strcmp(cmd, "screen") == 0) {
+    return cmd_screen(argc, argv);
   }
-  if (argc >= 2 && strcmp(argv[1], "fixture") == 0) {
-    return cmd_fixture(argc, argv);
-  }
-  if (argc >= 2 && strcmp(argv[1], "lcd") == 0) {
-    return cmd_lcd(argc, argv);
-  }
-  if (argc >= 2 && (strcmp(argv[1], "buzz") == 0 || strcmp(argv[1], "buzzer") == 0)) {
+  if (strcmp(cmd, "buzz") == 0 || strcmp(cmd, "buzzer") == 0) {
     return cmd_buzz(argc, argv);
   }
-  if (argc >= 2 && (strcmp(argv[1], "at") == 0 || strcmp(argv[1], "wifi") == 0)) {
+  if (strcmp(cmd, "wifi") == 0) {
     return cmd_wifi(argc, argv);
   }
-  if (argc >= 2 && strcmp(argv[1], "boot") == 0) {
-    printf("[ew-boot] start argc=%d\n", argc);
-    fflush(stdout);
+  if (strcmp(cmd, "at") == 0) {
+    return ew_wifi_at_cmd((argc >= 3) ? argv[2] : "AT");
+  }
+  if (strcmp(cmd, "boot") == 0) {
     alert_lcd_boot_splash();
-    printf("[ew-boot] splash returned (should not)\n");
+    printf("[ew-boot] UI loop returned (unexpected)\n");
     fflush(stdout);
     return 0;
   }
-  if (argc >= 2 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "help") == 0)) {
-    print_help();
+  if (strcmp(cmd, "chat") == 0) {
+    ew_chat_run();
     return 0;
+  }
+  if (strcmp(cmd, "ask") == 0) {
+    return cmd_ask(argc, argv);
+  }
+  if (strcmp(cmd, "help") == 0 || strcmp(cmd, "-h") == 0) {
+    return cmd_help();
   }
 
+  printf("edge_walker · radar %s\n", EW_RADAR_DEV);
   return cmd_loop();
 }

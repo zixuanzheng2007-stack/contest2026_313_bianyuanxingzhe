@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "team_id": "contest2026_313_bianyuanxingzhe",
+  "github_login": "zixuanzheng2007-stack",
+  "generator": "manual-cursor-archive",
+  "source_note": "官方采集器支持 Claude Code / OpenCode / Codex / AIoT-IDE。本批为 Cursor Agent 开发全过程原始日志归档（含 openvela 母目录会话）。",
+  "sessions": [
+    {
+      "session_id": "6e5f1783-58c7-482e-8811-248998f1ee8c",
+      "tool": "cursor",
+      "title": "openvela母目录-竞赛硬件资料与选型",
+      "started_at": "2026-07-19T14:20:00.000Z",
+      "last_event_at": "2026-08-10T19:52:32.969Z",
+      "event_count": 579,
+      "file_path": "logs/zixuanzheng2007-stack/2026-07-19/cursor__6e5f1783-58c7-482e-8811-248998f1ee8c.jsonl",
+      "raw_file_path": "logs/zixuanzheng2007-stack/2026-07-19/raw/6e5f1783-58c7-482e-8811-248998f1ee8c.jsonl",
+      "collection_mode": "manual-cursor-archive",
+      "health": "ok",
+      "note": "Cursor 非官方自动采集；已转竞赛 schema 并保留 raw"
+    },
+    {
+      "session_id": "c06c0b41-3b5e-4e46-a14d-1a09679677b2",
+      "tool": "cursor",
+      "title": "专属仓fork与分支确认",
+      "started_at": "2026-08-06T14:52:00.000Z",
+      "last_event_at": "2026-08-10T19:52:33.090Z",
+      "event_count": 22,
+      "file_path": "logs/zixuanzheng2007-stack/2026-08-06/cursor__c06c0b41-3b5e-4e46-a14d-1a09679677b2.jsonl",
+      "raw_file_path": "logs/zixuanzheng2007-stack/2026-08-06/raw/c06c0b41-3b5e-4e46-a14d-1a09679677b2.jsonl",
+      "collection_mode": "manual-cursor-archive",
+      "health": "ok",
+      "note": "Cursor 非官方自动采集；已转竞赛 schema 并保留 raw"
+    },
+    {
+      "session_id": "df773b3a-7f00-4cb4-a0df-96892eb25e81",
+      "tool": "cursor",
+      "title": "边缘行者主开发会话-方案到板端联调",
+      "started_at": "2026-08-06T15:05:00.000Z",
+      "last_event_at": "2026-08-10T19:48:00.000Z",
+      "event_count": 486,
+      "file_path": "logs/zixuanzheng2007-stack/2026-08-06/cursor__df773b3a-7f00-4cb4-a0df-96892eb25e81.jsonl",
+      "raw_file_path": "logs/zixuanzheng2007-stack/2026-08-06/raw/df773b3a-7f00-4cb4-a0df-96892eb25e81.jsonl",
+      "collection_mode": "manual-cursor-archive",
+      "health": "ok",
+      "note": "Cursor 非官方自动采集；已转竞赛 schema 并保留 raw"
+    }
+  ],
+  "updated_at": "2026-08-10T19:52:33.209014+00:00"
+}

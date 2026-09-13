@@ -1,0 +1,12 @@
+    /* Contest 313 edge_walker: approach alert tool (IPC to ew boot UI) */
+    REGISTER_TOOL(
+        "approach_alert",
+        "Execute pre-judged approach warning on buzzer+LCD. "
+        "Do NOT use LLM to estimate range; level is from radar policy.",
+        TOOL_SCHEMA_BEGIN()
+            TOOL_PARAM_STR("level",
+                "Alert level: none, soft, strong, or emergency")
+            "," TOOL_PARAM_STR("reason",
+                "Short reason e.g. R 12.0m approaching")
+            TOOL_SCHEMA_END(),
+        tool_approach_alert_execute);

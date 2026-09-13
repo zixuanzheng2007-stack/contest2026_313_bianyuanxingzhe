@@ -1,0 +1,8 @@
+{
+  "phase": "task006_flash_ok_ttys1_present",
+  "ts": "2026-08-16T11:42:30+08:00",
+  "flash": "OK host COM7 sftool 0.2.5 exit 0",
+  "uname": "Aug 16 2026 11:34:09",
+  "ls_dev": "ttyS0 ttyS1 ttyACM0",
+  "next": "hexdump /dev/ttyS1 look for F4 F3 F2 F1"
+}

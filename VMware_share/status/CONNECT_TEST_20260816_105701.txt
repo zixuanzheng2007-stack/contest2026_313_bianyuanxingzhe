@@ -1,0 +1,9 @@
+time: 2026-08-16T10:57:01+08:00
+usb_ch343: Bus 001 Device 005: ID 1a86:55d3 QinHeng Electronics USB Single Serial
+ttyACM0: crw-rw-rw- 1 root dialout 166, 0  8月 16 10:56 /dev/ttyACM0
+nsh_earlier: OK (uname NuttX arm nsh Aug 12 2026)
+nsh_now: NO_RESPONSE (after dd hang / RTS pulse)
+radar_device: /dev/ttyS0 (=UART2; console UART1 not listed as ttyS)
+ttyS1: absent (expected with CONSOLE_UART=1)
+radar_bytes: 0 (dd blocked)
+note: need board power-cycle; verify LD2451 VIN/GND and TX->PA20 RX->PA27

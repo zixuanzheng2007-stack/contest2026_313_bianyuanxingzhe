@@ -1,0 +1,27 @@
+{
+  "ts": "2026-09-13T14:43:36+08:00",
+  "active_id": "TASK_024",
+  "blocker": "guest_flash",
+  "owner": "guest",
+  "guest": {
+    "doing": "build OK; wait CH343",
+    "need": "flash /dev/ttyACM0 then peer REPLYs"
+  },
+  "host": {
+    "doing": "USB passthrough",
+    "need": "connect CH343 to VM or flash COM7"
+  },
+  "peer": {
+    "doing": "see docs/提交材料/队友任务_2026-09-13.md",
+    "need": "REPLY_AI_AGENT_SKILL + REPLY_DATA"
+  },
+  "flash": {
+    "bin": "artifacts/nuttx_wifiui.bin",
+    "port": "/dev/ttyACM0",
+    "ok": false,
+    "addr": "0x12010000",
+    "bytes": 1593428,
+    "via": "guest_sftool"
+  },
+  "do_not": ["ESP BOOT", "put wifi password in mailbox"]
+}

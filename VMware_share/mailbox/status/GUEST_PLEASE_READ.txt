@@ -1,0 +1,5 @@
+2026-09-04 14:28 CST · TASK_008 界面处理（请立即读）
+
+- 任务：mailbox/host_to_guest/TASK_008_EW_UI.md
+- 真机已亮：深蓝 + EW READY（勿再改回 lvgldemo widgets 当产品开机）
+- 回执：mailbox/guest_to_host/REPLY_008.md

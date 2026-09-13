@@ -1,0 +1,5 @@
+VMware shared folder OK
+Guest: Ubuntu 24.04
+Share: VMware_share
+Mount: /mnt/hgfs/VMware_share
+Time: 2026年 08月 12日 星期三 00:50:32 CST
