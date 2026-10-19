@@ -35,3 +35,15 @@ void alert_output(ew_alert_level_t level, const char *reason)
   alert_buzzer_level(level);
   alert_lcd_show(level, reason);
 }
+
+void alert_output_event(const char *event_id, const char *source,
+                        ew_alert_level_t level, const char *reason)
+{
+  printf("[alert_output] event_id=%s source=%s level=%s reason=%s\n",
+         event_id ? event_id : "", source ? source : "", level_name(level),
+         reason ? reason : "");
+  fflush(stdout);
+
+  alert_buzzer_level(level);
+  alert_lcd_show_event(event_id, source, level, reason);
+}

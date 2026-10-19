@@ -1,0 +1,30 @@
+Stage 1 host verification
+Date: 2026-10-19
+Baseline: dev-ai-contest-2026 @ 8a16266
+Compiler: MSVC 19.44, C11, /W4
+
+host_smoke
+  official: STRONG
+  soft: SOFT
+  strong: STRONG
+  emergency: EMERGENCY
+  away: no valid approaching target
+  hold_clear: NONE
+  hold_stale: link=0
+  Result: ALL PASS
+
+event_chain_smoke
+  fake -> unified dispatcher -> Tool -> output: PASS
+  radar -> unified dispatcher -> Tool -> output: PASS
+  event ids unique: PASS
+  source preserved: PASS
+  level not rewritten: PASS
+  Tool event_id preserved in response: PASS
+  Result: EVENT CHAIN PASS
+
+Board verification
+  Status: PENDING
+  Reason: development-board VM 192.168.126.128:22 was offline
+  Required next: one real radar transition with event_id through
+                 [ew_event] -> [ew_agent] -> [ai_agent]
+                 -> [alert_output] -> [alert_lcd]

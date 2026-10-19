@@ -5,6 +5,7 @@
 #include "ew_serial_ctl.h"
 #include "ew_mirror.h"
 #include "alert_output.h"
+#include "ew_agent.h"
 #include "ew_chat.h"
 #include "ew_ld2451.h"
 #include "ew_llm.h"
@@ -185,7 +186,7 @@ static void ctl_fake(float range_m, float speed)
   t.ttc_s = t.approaching ? (t.range_m / (t.speed_kmh / 3.6f)) : -1.0f;
   d = ew_decide(&t);
   printf("[ew-ctl] fake %.1fm %.1fkm/h -> %s\n", range_m, speed, d.reason);
-  alert_output(d.level, d.reason);
+  ew_agent_emit_decision(&d, EW_EVENT_SOURCE_SERIAL);
 }
 
 static void *ctl_worker(void *arg)
@@ -310,6 +311,7 @@ static void ctl_dispatch(const char *line)
   }
 
   if (strcmp(verb, "alert") == 0) {
+    ew_decision_t d;
     const char *reason = "remote";
 
     parse_token(&p, a, sizeof(a));
@@ -317,7 +319,10 @@ static void ctl_dispatch(const char *line)
     if (*p != '\0') {
       reason = p;
     }
-    alert_output(ctl_alert_level(a), reason);
+    memset(&d, 0, sizeof(d));
+    d.level = ctl_alert_level(a);
+    d.reason = reason;
+    ew_agent_emit_decision(&d, EW_EVENT_SOURCE_SERIAL);
     return;
   }
 
