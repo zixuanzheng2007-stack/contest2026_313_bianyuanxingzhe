@@ -1,0 +1,11 @@
+case_no,source,trigger,level,event_id,ew_event,ew_agent,ai_agent,ew_ipc,alert_output,alert_lcd,result,notes
+1,fake,ew fake 10 2,STRONG,,,,,,,,PENDING,
+2,fake,ew fake 6 40,EMERGENCY,,,,,,,,PENDING,
+3,fake,ew fake 22 20,SOFT,,,,,,,,PENDING,
+4,radar,real approach strong,STRONG,,,,,,,,PENDING,
+5,radar,real approach emergency,EMERGENCY,,,,,,,,PENDING,
+6,radar,real approach soft,SOFT,,,,,,,,PENDING,
+7,radar,target leaves,NONE,,,,,,,,PENDING,clear event
+8,manual,ew alert strong stage1,STRONG,,,,,,,,PENDING,
+9,serial,@fake 10 2,STRONG,,,,,,,,PENDING,
+10,agent,external approach_alert,STRONG,,,,,,,,PENDING,event_id may be evt-agt
