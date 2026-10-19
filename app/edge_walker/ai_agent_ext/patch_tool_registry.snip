@@ -4,7 +4,11 @@
         "Execute pre-judged approach warning on buzzer+LCD. "
         "Do NOT use LLM to estimate range; level is from radar policy.",
         TOOL_SCHEMA_BEGIN()
-            TOOL_PARAM_STR("level",
+            TOOL_PARAM_STR("event_id",
+                "Trace id supplied by ew; omit only for external Agent calls")
+            "," TOOL_PARAM_STR("source",
+                "Event source: radar, fake, manual, serial, or agent")
+            "," TOOL_PARAM_STR("level",
                 "Alert level: none, soft, strong, or emergency")
             "," TOOL_PARAM_STR("reason",
                 "Short reason e.g. R 12.0m approaching")
