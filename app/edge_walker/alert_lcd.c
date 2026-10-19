@@ -152,12 +152,19 @@ static void apply_alert_ui(ew_alert_level_t level, const char *reason)
  * 跨进程告警请求
  ****************************************************************************/
 
-static void queue_request(ew_alert_level_t level, const char *reason)
+static void queue_request(const char *event_id, const char *source,
+                          ew_alert_level_t level, const char *reason)
 {
-  char line[96];
+  char line[160];
   int fd;
 
-  snprintf(line, sizeof(line), "%d %s\n", (int)level, reason ? reason : "");
+  if (event_id != NULL && event_id[0] != '\0') {
+    snprintf(line, sizeof(line), "%d %s %s %s\n", (int)level, event_id,
+             source ? source : "manual", reason ? reason : "");
+  } else {
+    snprintf(line, sizeof(line), "%d %s\n", (int)level,
+             reason ? reason : "");
+  }
   fd = open(EW_ALERT_REQ, O_WRONLY | O_CREAT | O_TRUNC, 0666);
   if (fd < 0) {
     printf("[alert_lcd] queue open failed errno=%d\n", errno);
@@ -170,11 +177,14 @@ static void queue_request(ew_alert_level_t level, const char *reason)
 
 static void poll_request(uint32_t now)
 {
-  char line[96];
+  char line[160];
+  char event_id[EW_EVENT_ID_SIZE];
+  char source[EW_EVENT_SOURCE_SIZE];
   char reason[64];
   const char *sp;
   ssize_t n;
   int level_i;
+  int fields;
   int fd;
 
   if (now - g_last_req_ms < EW_REQ_POLL_MS) {
@@ -195,8 +205,19 @@ static void poll_request(uint32_t now)
 
   line[n] = '\0';
   level_i = (int)EW_ALERT_NONE;
+  event_id[0] = '\0';
+  source[0] = '\0';
   reason[0] = '\0';
-  if (sscanf(line, "%d %63[^\n]", &level_i, reason) < 1) {
+  fields = sscanf(line, "%d %31s %15s %63[^\n]", &level_i, event_id, source,
+                  reason);
+  if (fields >= 3 && strncmp(event_id, "evt-", 4) == 0) {
+    printf("[alert_lcd] ipc event_id=%s source=%s level=%d\n", event_id,
+           source, level_i);
+    fflush(stdout);
+    if (fields < 4) {
+      reason[0] = '\0';
+    }
+  } else if (sscanf(line, "%d %63[^\n]", &level_i, reason) < 1) {
     return;
   }
   sp = reason;
@@ -250,7 +271,7 @@ static void apply_decision(const ew_decision_t *d, uint32_t now)
            d->reason ? d->reason : "", (int)d->link);
     fflush(stdout);
     if (d->level != g_buzz_level) {
-      ew_agent_proactive_alert(d->level, d->range_m, d->reason);
+      ew_agent_emit_decision(d, EW_EVENT_SOURCE_RADAR);
     } else {
       alert_buzzer_level(d->level);
     }
@@ -441,12 +462,23 @@ void alert_lcd_detach_warn_ui(void)
 
 void alert_lcd_show(ew_alert_level_t level, const char *reason)
 {
+  alert_lcd_show_event(NULL, NULL, level, reason);
+}
+
+void alert_lcd_show_event(const char *event_id, const char *source,
+                          ew_alert_level_t level, const char *reason)
+{
+  if (event_id != NULL && event_id[0] != '\0') {
+    printf("[alert_lcd] executor event_id=%s source=%s level=%s\n", event_id,
+           source ? source : "", ew_alert_level_name(level));
+    fflush(stdout);
+  }
   if (g_ui_ready) {
     apply_alert_ui(level, reason);
     return;
   }
   /* 常驻 UI 不在本进程（NSH 里手动敲的 ew alert），落盘交给它 */
-  queue_request(level, reason);
+  queue_request(event_id, source, level, reason);
 }
 
 int alert_lcd_info(void)
@@ -538,6 +570,14 @@ void alert_lcd_show(ew_alert_level_t level, const char *reason)
 {
   printf("[alert_lcd] stub level=%d reason=%s\n",
          (int)level, reason ? reason : "");
+}
+
+void alert_lcd_show_event(const char *event_id, const char *source,
+                          ew_alert_level_t level, const char *reason)
+{
+  printf("[alert_lcd] stub event_id=%s source=%s level=%d reason=%s\n",
+         event_id ? event_id : "", source ? source : "", (int)level,
+         reason ? reason : "");
 }
 
 void alert_lcd_boot_splash(void)

@@ -35,7 +35,8 @@ static const char *g_approach_warn_skill =
     "## How to use\n"
     "1. 判决已在 ew_ld2451 + ew_decide 完成，禁止用 LLM 估算距离或 TTC。\n"
     "2. 主动执行 Tool `approach_alert`，参数示例：\n"
-    "   `{\"level\":\"strong\",\"reason\":\"R 12.3m approaching\"}`\n"
+    "   `{\"event_id\":\"evt-rad-...\",\"source\":\"radar\","
+    "\"level\":\"strong\",\"reason\":\"R 12.3m approaching\"}`\n"
     "3. level 取值：none | soft | strong | emergency（或 0–3）。\n"
     "4. Tool 内部只调用 alert_output(level, reason)，串口应出现 "
     "`[alert_output] level=...`。\n"
@@ -43,7 +44,8 @@ static const char *g_approach_warn_skill =
     "\n"
     "## Example\n"
     "雷达 latch STRONG @ 12m → 主动 approach_alert "
-    "{\"level\":\"strong\",\"reason\":\"R 12.0m approaching\"}\n"
+    "{\"event_id\":\"evt-rad-...\",\"source\":\"radar\","
+    "\"level\":\"strong\",\"reason\":\"R 12.0m approaching\"}\n"
     "→ 屏橙 WARN + 蜂鸣 + 日志 `[alert_output] level=STRONG ...`\n";
 
 static void install_skill_file(void)
@@ -89,11 +91,44 @@ void ew_agent_init(void)
   fflush(stdout);
 }
 
+int ew_agent_emit_decision(const ew_decision_t *decision,
+                           ew_event_source_t source)
+{
+  char event_id[EW_EVENT_ID_SIZE];
+
+  if (decision == NULL) {
+    return -1;
+  }
+
+  ew_event_make_id(event_id, sizeof(event_id), source);
+  printf("[ew_event] event_id=%s source=%s level=%s range=%.1fm "
+         "speed=%.1f reason=%s\n",
+         event_id, ew_event_source_name(source),
+         ew_alert_level_name(decision->level), decision->range_m,
+         decision->speed_kmh, decision->reason ? decision->reason : "");
+  fflush(stdout);
+
+  return ew_agent_proactive_alert_ex(event_id, source, decision->level,
+                                     decision->range_m, decision->reason);
+}
+
 int ew_agent_proactive_alert(ew_alert_level_t level, float range_m,
                              const char *reason)
 {
+  char event_id[EW_EVENT_ID_SIZE];
+
+  ew_event_make_id(event_id, sizeof(event_id), EW_EVENT_SOURCE_AGENT);
+  return ew_agent_proactive_alert_ex(event_id, EW_EVENT_SOURCE_AGENT, level,
+                                     range_m, reason);
+}
+
+int ew_agent_proactive_alert_ex(const char *event_id,
+                                ew_event_source_t source,
+                                ew_alert_level_t level, float range_m,
+                                const char *reason)
+{
   char ui_reason[64];
-  char out[128];
+  char out[256];
 
   if (level != EW_ALERT_NONE && range_m > 0.0f) {
     snprintf(ui_reason, sizeof(ui_reason), "R %.1fm", range_m);
@@ -104,9 +139,12 @@ int ew_agent_proactive_alert(ew_alert_level_t level, float range_m,
     reason = "";
   }
 
-  printf("[ew_agent] proactive approach_alert level=%s range=%.1fm\n",
+  printf("[ew_agent] proactive approach_alert event_id=%s source=%s "
+         "level=%s range=%.1fm\n",
+         event_id ? event_id : "", ew_event_source_name(source),
          ew_alert_level_name(level), range_m);
   fflush(stdout);
 
-  return ew_agent_tool_approach_alert(level, reason, out, sizeof(out));
+  return ew_agent_tool_approach_alert_ex(event_id, source, level, reason, out,
+                                         sizeof(out));
 }
