@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Edge Walker Team (contest2026_313_bianyuanxingzhe) */
+
 /****************************************************************************
  * WiFi 配网页：扫描列表 + 密码输入
  *
@@ -19,6 +22,10 @@ void ew_wifi_ui_tick(void);
 
 /* 离开本页 */
 void ew_wifi_ui_teardown(void);
+
+/* PC keyboard routing for the currently active SSID/password field. */
+int ew_wifi_ui_remote_set_text(const char *text);
+int ew_wifi_ui_remote_key(const char *key);
 
 #ifdef __cplusplus
 }

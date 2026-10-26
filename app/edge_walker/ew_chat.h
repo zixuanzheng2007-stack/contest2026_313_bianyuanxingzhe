@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Edge Walker Team (contest2026_313_bianyuanxingzhe) */
+
 /****************************************************************************
  * 边缘行者屏上界面：预警 / 智能体对话 / WiFi 配网 三页共用一个 LVGL 主循环
  ****************************************************************************/
@@ -33,6 +36,13 @@ ew_page_t ew_ui_page(void);
 
 /* 供各页复用的中文字体（lv_font_t *，未加载到 TTF 时为 NULL） */
 void *ew_ui_font(void);
+
+/* Replace malformed/unsupported UTF-8 glyphs in dynamic display text. */
+void ew_ui_sanitize_text(char *text);
+
+/* PC 面板 UTF-8 输入透传；非对话页会切页后再应用。 */
+int ew_chat_remote_set_text(const char *text);
+int ew_chat_remote_key(const char *key);
 
 #ifdef __cplusplus
 }

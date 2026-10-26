@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Edge Walker Team (contest2026_313_bianyuanxingzhe) */
+
 /****************************************************************************
  * 蜂鸣器 PA28（40P 针 23）
  *
@@ -19,6 +22,11 @@ int alert_buzzer_beep(unsigned freq_hz, unsigned duration_ms);
 
 /* 预警换挡：按等级选频率并交给后台 worker；EW_ALERT_NONE 立即停。 */
 void alert_buzzer_level(ew_alert_level_t level);
+
+/* Prepare once before starting radar acquisition. Safety updates never create
+ * threads, log, access files or wait for UI/network activity. */
+int alert_buzzer_prepare(void);
+void alert_buzzer_safety_level(ew_alert_level_t level);
 
 /* 直接指定频率的后台连续鸣叫；freq_hz=0 停止。 */
 void alert_buzzer_set_alert(unsigned freq_hz);

@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Edge Walker Team (contest2026_313_bianyuanxingzhe) */
+
 /****************************************************************************
  * 预警页显示（郑子轩）
  *
@@ -16,9 +19,14 @@ extern "C" {
 
 /* 刷新预警配色与文字；常驻 UI 未起来时改为落盘排队，等它起来再显示。 */
 void alert_lcd_show(ew_alert_level_t level, const char *reason);
-
-void alert_lcd_show_event(const char *event_id, const char *source,
-                          ew_alert_level_t level, const char *reason);
+void alert_lcd_show_event(ew_alert_level_t level, const char *reason,
+                          unsigned long event_id);
+int alert_lcd_show_event_checked(ew_alert_level_t level, const char *reason,
+                                 unsigned long event_id);
+int alert_lcd_show_safety_event(ew_alert_level_t level, const char *reason,
+                                unsigned long event_id);
+/* All-page UI delivery; acquisition and buzzer live in ew_safety. */
+void alert_lcd_service_tick(void);
 
 /* rcS 入口：初始化 LVGL 并进入 UI 主循环，正常情况下不返回。 */
 void alert_lcd_boot_splash(void);

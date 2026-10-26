@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Edge Walker Team (contest2026_313_bianyuanxingzhe) */
+
 /****************************************************************************
  * 提醒出口（郑子轩主责；等级枚举与 F 冻结接口对齐）
  *
@@ -6,6 +9,8 @@
 
 #ifndef EDGE_WALKER_ALERT_OUTPUT_H
 #define EDGE_WALKER_ALERT_OUTPUT_H
+
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,9 +26,13 @@ typedef enum {
 /* 档位：NONE 静音 … EMERGENCY 紧急。reason 可为 NULL。 */
 void alert_output(ew_alert_level_t level, const char *reason);
 
-/* Same output path, with event trace metadata for the B-side chain. */
-void alert_output_event(const char *event_id, const char *source,
-                        ew_alert_level_t level, const char *reason);
+/* Correlation for the local proactive chain; zero denotes an untraced call. */
+void alert_output_event(ew_alert_level_t level, const char *reason,
+                        unsigned long event_id);
+/* 0 = UI callback, 1 = queued, negative = delivery failed. None of these
+ * statuses proves an acoustic or optical measurement. */
+int alert_output_event_checked(ew_alert_level_t level, const char *reason,
+                               unsigned long event_id, bool safety_owned);
 
 #ifdef __cplusplus
 }

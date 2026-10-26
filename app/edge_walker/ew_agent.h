@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Edge Walker Team (contest2026_313_bianyuanxingzhe) */
+
 /****************************************************************************
  * ai_agent Skill/Tool 桥接（边缘行者 · 赛题合规）
  *
@@ -9,22 +12,28 @@
 #define EDGE_WALKER_EW_AGENT_H
 
 #include "alert_output.h"
-#include "ew_event.h"
 #include "ew_ld2451.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* 开机安装 approach-warn Skill、注册 Tool 元数据 */
+/* 开机安装 approach-warn Skill；独立 ai_agent 注册由构建脚本注入。 */
 void ew_agent_init(void);
 
-/*
- * Single B-side entry for every pre-judged alert. Generates the event id,
- * records the source, and forwards the unchanged decision to the Tool chain.
- */
+/* Selected Stage1 idea: trace metadata stays separate from A's decision.
+ * Numeric IDs and EWA1 IPC stay compatible with the hardened implementation. */
+typedef enum {
+  EW_EVENT_SOURCE_RADAR, EW_EVENT_SOURCE_FAKE, EW_EVENT_SOURCE_MANUAL,
+  EW_EVENT_SOURCE_SERIAL, EW_EVENT_SOURCE_AGENT
+} ew_event_source_t;
+const char *ew_event_source_name(ew_event_source_t source);
+unsigned long ew_agent_next_event_id(void);
 int ew_agent_emit_decision(const ew_decision_t *decision,
                            ew_event_source_t source);
+int ew_agent_emit_decision_event(const ew_decision_t *decision,
+                                 ew_event_source_t source,
+                                 unsigned long event_id);
 
 /*
  * 主动触发 approach_alert Tool（LLM 不参与判距）。
@@ -32,11 +41,6 @@ int ew_agent_emit_decision(const ew_decision_t *decision,
  */
 int ew_agent_proactive_alert(ew_alert_level_t level, float range_m,
                              const char *reason);
-
-int ew_agent_proactive_alert_ex(const char *event_id,
-                                ew_event_source_t source,
-                                ew_alert_level_t level, float range_m,
-                                const char *reason);
 
 #ifdef __cplusplus
 }

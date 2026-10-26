@@ -1,13 +1,17 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Edge Walker Team (contest2026_313_bianyuanxingzhe) */
+
 /****************************************************************************
  * ai_agent Tool: approach_alert
  *
- * 对齐 packages/ai_agent tool_registry 的 execute 签名。
- * 本 Tool 只做一件事：alert_output(level, reason)。不读雷达、不算门限。
+ * ew 内部的本地调用；独立 ai_agent 注册入口由 ai_agent_ext 提供。
+ * 只执行 alert_output(level, reason)，不读雷达、不算门限。
  ****************************************************************************/
 
 #include "ew_agent_tool.h"
 #include "alert_output.h"
 #include "ew_ld2451.h"
+#include "ai_agent_ext/ew_alert_ipc.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -17,194 +21,65 @@ static const char *level_to_str(ew_alert_level_t level)
   return ew_alert_level_name(level);
 }
 
-static ew_alert_level_t level_from_str(const char *s)
+int ew_agent_tool_execute(const char *input_json, char *output,
+                                size_t output_size)
 {
-  if (s == NULL || s[0] == '\0') {
-    return EW_ALERT_NONE;
-  }
-  if (strcmp(s, "none") == 0 || strcmp(s, "NONE") == 0 ||
-      strcmp(s, "0") == 0) {
-    return EW_ALERT_NONE;
-  }
-  if (strcmp(s, "soft") == 0 || strcmp(s, "SOFT") == 0 ||
-      strcmp(s, "1") == 0) {
-    return EW_ALERT_SOFT;
-  }
-  if (strcmp(s, "strong") == 0 || strcmp(s, "STRONG") == 0 ||
-      strcmp(s, "2") == 0) {
-    return EW_ALERT_STRONG;
-  }
-  if (strcmp(s, "emergency") == 0 || strcmp(s, "EMERGENCY") == 0 ||
-      strcmp(s, "crit") == 0 || strcmp(s, "CRIT") == 0 ||
-      strcmp(s, "3") == 0) {
-    return EW_ALERT_EMERGENCY;
-  }
-  return EW_ALERT_SOFT;
-}
-
-static void json_string_value(const char *json, const char *key, char *out,
-                              size_t out_size)
-{
-  const char *p;
-
-  if (out == NULL || out_size == 0) {
-    return;
-  }
-  out[0] = '\0';
-  if (json == NULL || key == NULL) {
-    return;
-  }
-
-  p = strstr(json, key);
-  if (p == NULL || (p = strchr(p, ':')) == NULL) {
-    return;
-  }
-  p++;
-  while (*p == ' ' || *p == '\t') {
-    p++;
-  }
-  if (*p != '"') {
-    return;
-  }
-  p++;
-  {
-    size_t o = 0;
-
-    while (*p != '\0' && *p != '"' && o + 1 < out_size) {
-      if (*p == '\\' && p[1] != '\0') {
-        p++;
-      }
-      out[o++] = *p++;
+  ew_alert_request_t request;
+  int ret = ew_alert_request_parse_json(input_json, &request);
+  if (ret < 0) {
+    if (output != NULL && output_size > 0) {
+      snprintf(output, output_size,
+               "{\"ok\":false,\"error\":\"invalid_input\"}");
     }
-    out[o] = '\0';
+    return ret;
   }
-}
-
-/* 极简 JSON 解析：{"level":"strong","reason":"..."} */
-static int parse_input(const char *input_json, ew_alert_level_t *level_out,
-                       char *reason_out, unsigned reason_sz)
-{
-  const char *p;
-  char level_buf[16];
-
-  if (level_out == NULL) {
-    return -1;
-  }
-  *level_out = EW_ALERT_SOFT;
-  if (reason_out != NULL && reason_sz > 0) {
-    reason_out[0] = '\0';
-  }
-
-  if (input_json == NULL || input_json[0] == '\0') {
-    return 0;
-  }
-
-  p = strstr(input_json, "\"level\"");
-  if (p != NULL) {
-    p = strchr(p, ':');
-    if (p != NULL) {
-      p++;
-      while (*p == ' ' || *p == '\t') {
-        p++;
-      }
-      if (*p == '"') {
-        unsigned i = 0;
-
-        p++;
-        while (*p != '\0' && *p != '"' && i + 1 < sizeof(level_buf)) {
-          level_buf[i++] = *p++;
-        }
-        level_buf[i] = '\0';
-        *level_out = level_from_str(level_buf);
-      }
-    }
-  }
-
-  if (reason_out == NULL || reason_sz == 0) {
-    return 0;
-  }
-
-  p = strstr(input_json, "\"reason\"");
-  if (p == NULL) {
-    return 0;
-  }
-  p = strchr(p, ':');
-  if (p == NULL) {
-    return 0;
-  }
-  p++;
-  while (*p == ' ' || *p == '\t') {
-    p++;
-  }
-  if (*p != '"') {
-    return 0;
-  }
-  p++;
-  {
-    unsigned o = 0;
-
-    while (*p != '\0' && *p != '"' && o + 1 < reason_sz) {
-      if (*p == '\\' && p[1] != '\0') {
-        p++;
-      }
-      reason_out[o++] = *p++;
-    }
-    reason_out[o] = '\0';
-  }
-  return 0;
-}
-
-int tool_approach_alert_execute(const char *input_json, char *output,
-                              size_t output_size)
-{
-  ew_alert_level_t level = EW_ALERT_SOFT;
-  ew_event_source_t source;
-  char event_id[EW_EVENT_ID_SIZE];
-  char source_name[EW_EVENT_SOURCE_SIZE];
-  char reason[96];
-
-  parse_input(input_json, &level, reason, sizeof(reason));
-  json_string_value(input_json, "\"event_id\"", event_id, sizeof(event_id));
-  json_string_value(input_json, "\"source\"", source_name, sizeof(source_name));
-  source = ew_event_source_parse(source_name);
-  if (event_id[0] == '\0') {
-    ew_event_make_id(event_id, sizeof(event_id), EW_EVENT_SOURCE_AGENT);
-  }
-  return ew_agent_tool_approach_alert_ex(event_id, source, level, reason,
-                                         output, output_size);
-}
-
-int ew_agent_tool_approach_alert_ex(const char *event_id,
-                                    ew_event_source_t source,
-                                    ew_alert_level_t level,
-                                    const char *reason, char *output,
-                                    size_t output_size)
-{
-  printf("[ai_agent] tool approach_alert event_id=%s source=%s level=%s "
-         "reason=%s\n",
-         event_id ? event_id : "", ew_event_source_name(source),
-         level_to_str(level), reason ? reason : "");
-  fflush(stdout);
-
-  alert_output_event(event_id, ew_event_source_name(source), level,
-                     reason ? reason : "");
-
-  if (output != NULL && output_size > 0) {
-    snprintf(output, output_size,
-             "{\"ok\":true,\"tool\":\"approach_alert\",\"event_id\":\"%s\","
-             "\"source\":\"%s\",\"level\":\"%s\",\"reason\":\"%s\"}",
-             event_id ? event_id : "", ew_event_source_name(source),
-             level_to_str(level), reason ? reason : "");
-  }
-  return 0;
+  return ew_agent_tool_approach_alert_event((ew_alert_level_t)request.level,
+                                           request.reason, output, output_size,
+                                           request.event_id);
 }
 
 int ew_agent_tool_approach_alert(ew_alert_level_t level, const char *reason,
                                  char *output, size_t output_size)
 {
-  char event_id[EW_EVENT_ID_SIZE];
+  return ew_agent_tool_approach_alert_event(level, reason, output, output_size, 0);
+}
 
-  ew_event_make_id(event_id, sizeof(event_id), EW_EVENT_SOURCE_AGENT);
-  return ew_agent_tool_approach_alert_ex(event_id, EW_EVENT_SOURCE_AGENT,
-                                         level, reason, output, output_size);
+int ew_agent_tool_approach_alert_event(ew_alert_level_t level, const char *reason,
+                                      char *output, size_t output_size,
+                                      unsigned long event_id)
+{
+  return ew_agent_tool_dispatch_event(level, reason, output, output_size,
+                                      event_id, false);
+}
+
+int ew_agent_tool_dispatch_event(ew_alert_level_t level, const char *reason,
+                                 char *output, size_t output_size,
+                                 unsigned long event_id, bool safety_owned)
+{
+  int ret;
+  if (level < EW_ALERT_NONE || level > EW_ALERT_EMERGENCY) {
+    if (output != NULL && output_size > 0) {
+      snprintf(output, output_size,
+               "{\"ok\":false,\"error\":\"invalid_level\"}");
+    }
+    return -EINVAL;
+  }
+  if (event_id != 0) {
+    printf("[ew_event] event_id=%lu stage=tool tool=approach_alert\n", event_id);
+  }
+  printf("[ai_agent] tool approach_alert level=%s reason=%s\n",
+         level_to_str(level), reason ? reason : "");
+  fflush(stdout);
+
+  ret = alert_output_event_checked(level, reason ? reason : "", event_id,
+                                    safety_owned);
+
+  if (output != NULL && output_size > 0) {
+    snprintf(output, output_size,
+             "{\"ok\":%s,\"tool\":\"approach_alert\",\"level\":\"%s\","
+             "\"event_id\":%lu,\"status\":\"%s\",\"result\":%d}",
+             ret >= 0 ? "true" : "false", level_to_str(level), event_id,
+             ret < 0 ? "rejected" : (ret == 1 ? "queued" : "applied"), ret);
+  }
+  return ret < 0 ? ret : 0;
 }

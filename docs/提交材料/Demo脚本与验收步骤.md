@@ -46,7 +46,7 @@
 | B2 | 点快捷句 **「Who are you?」** 或 **「告警怎么工作」** | 气泡回复（本地或 MiMo） |
 | B3 | NSH（可选）：`ew ask 现在后面有没有车` | 打印回复（需 WiFi + AT 通） |
 
-**说明**：中文候选字需 `/data/font/MiSans-Regular.ttf`；未部署时可只用英文快捷句，不影响预警 Demo。
+**说明**：固件已内嵌思源黑体 GB2312 字库，中文候选字不依赖板端 TTF/OTF。字库外字符会显示为 `?`，不会导致整段文字渲染失败；如需扩展字符，可在 `/data/font/` 部署 OFL 授权的 Source Han Sans 或 Noto Sans CJK。
 
 ---
 
@@ -67,29 +67,56 @@
 |------|----------|------|
 | 接近检测 | `ew_ld2451.c` 解析 + `ew_decide` 门限 | ✅ 已落地 |
 | 主动执行提醒 | `alert_output()` → 蜂鸣 + LCD | ✅ 已落地（不等人问） |
-| ai_agent ≥1 Skill | 官方 `ai_agent` + Skill 配置 | ⚠️ **待韦政宇合入**（见 `Agent协作提示词.md`） |
+| ai_agent ≥1 Skill | `approach-warn` + `approach_alert`（`ew_agent.c`） | ✅ 已落地；录像用 `ew fake 10 20` 验链路 |
 | 对话 | `ew_chat` + `ew_llm`（MiMo HTTPS） | ✅ 可用（依赖联网） |
 
-当前：**安全环主动告警已真机验证**；Agent 线以 `ew_chat` + 本地 `local_reply` 演示，**正式 Skill 包为提交前 P0**。
+当前：**安全环主动告警 + Skill 链已编进固件**；Demo 必拍 A（预警）+ B（Agent/Skill 日志或快捷句），C（WiFi）可选。
 
 ---
 
-## 7. 5 分钟录像建议分镜
+## 7. 5 分钟录像（V2 · 分段录 → 剪辑）
 
-1. **0:00–0:30** 产品一句话 + 板子特写（雷达、屏、蜂鸣）
-2. **0:30–2:30** 演示 A（靠近 → 橙/红 + 蜂鸣 → 离开恢复）
-3. **2:30–3:30** 演示 B（Agent 快捷句 + 可选 `ew ask`）
-4. **3:30–4:30** 演示 C 或 NSH `ew wifi ping`（可选）
-5. **4:30–5:00** 架构图：雷达本地闭环 + Agent 不判距
+> 详表与 OBS 并列布局见归档的 [`拍摄指导_硬件照片与Demo视频.md`](archive/demo_work/拍摄指导_硬件照片与Demo视频.md)。
+
+**不要一镜到底**；原始分镜已归档至 `docs/提交材料/archive/demo_work/demo_clips/`。
+
+| 素材 | 内容 | 机位 |
+|------|------|------|
+| clip_A | 口播 + 硬件全貌 | 手机拍板 |
+| clip_B | **分档报警** READY→SOFT/WARN→CRIT→恢复 | 手机拍屏+蜂鸣 |
+| clip_C | **断网仍预警** | 手机拍屏 |
+| clip_D | **Agent 对话** | **录屏：PC ew_panel/串口 ∥ 实物屏** |
+| clip_E | **WiFi scan/join/ping** | **录屏并列**（勿依赖小屏触控） |
+| clip_F | `ew fake 10 20` Skill 链 | 录屏 + 串口 log |
+| clip_G | 架构图收尾 | 静态图 |
+
+**PC 远控**：`scripts/host/EW_PANEL.bat` → `@mirror on` `@goto wifi|chat` `@ask …`
+
+合成时间轴：A(0:30) → B(1:20) → C(0:30) → D(0:50) → E(0:50) → F(0:30) → G(0:20) ≈ **4:50**
 
 ---
 
-## 8. 三人分工（代码归属）
+## 8. 烧录后屏上勾选
+
+固件：`VMware_share/artifacts/nuttx.bin`（或 `nuttx_wifiui.bin`）@ `0x12010000` · COM7 @ 1Mbps
+
+- [ ] 开机进预警页，雷达接好时不长期卡 NO RADAR
+- [ ] `ew fake 10 20` → 橙/红 + 蜂鸣；串口见 `[ew_agent]` + `[alert_output]`
+- [ ] WiFi 页 scan / 手动 SSID → 状态 `WIFI ON x.x.x.x` 或失败原因
+- [ ] Agent 页快捷句「Who are you?」/「告警怎么工作」（需联网时先连 WiFi）
+
+VMware USB 透传：可移动设备 → 连接 CH343 → Guest 可烧录 `/dev/ttyACM0`。
+
+---
+
+## 9. 三人分工（代码归属）
 
 | 成员 | 模块 | 代码占比（行） |
 |------|------|----------------|
-| 郑子轩 | 主程序、预警 UI、蜂鸣、WiFi UI/AT、硬件烧录 | ~51% |
-| 王筠昊 | LD2451 解析与策略、`host_smoke` | ~15% |
-| 韦政宇 | Agent 页、拼音、LLM、AT HTTPS | ~34% |
+| 郑子轩 | 主程序、预警 UI、蜂鸣、WiFi UI/AT、`@` 遥控/镜像、硬件烧录 | 55–61% |
+| 王筠昊 | LD2451 解析与策略、`host_smoke` | 10–15% |
+| 韦政宇 | Agent 页、拼音、LLM、Skill/Tool | 29–35% |
+
+*不含 `ew_font_cjk_18.c` 生成字库。*
 
 详见 `docs/分工/工作完成情况_2026-09-11.md`。

@@ -1,2 +1,3 @@
 echo rcS_start > /dev/console
+sleep 5
 ew boot

@@ -1,16 +1,17 @@
+# Submission zip output
+dist/
+
 # Build artifacts
 build/
 out/
 cmake_out/
 *.o
-*.obj
 *.a
 *.elf
 *.hex
 *.map
 *.bin
 !logs/**/*.jsonl
-app/edge_walker/*.exe
 
 # Local tool caches (large / redistributable binaries)
 tools/sftool/**/*.exe
@@ -20,6 +21,17 @@ tools/putty.zip
 tools/ld2451/*.apk
 tools/ld2451/*.zip
 tools/ld2451/**/*.exe
+tools/ld2451/**/*.pdf
+tools/ld2451/**/*.html
+tools/sftool/*.zip
+tools/sftool/sftool-*/
+tools/sifli_docs/DevKit-LCD/
+tools/sifli_docs/*.zip
+tools/sifli_docs/SF32LB52-DevKit-LCD_wiki_*.md
+docs/硬件/sifli_pinout_sources/*.pdf
+docs/硬件/sifli_pinout_sources/*.asc
+docs/硬件/sifli_pinout_sources/*.png
+docs/硬件/sifli_pinout_sources/SF32LB52-DevKit-LCD_wiki_*.md
 tools/drivers/**
 tools/vmware/**
 
@@ -27,8 +39,42 @@ tools/vmware/**
 .DS_Store
 Thumbs.db
 *.swp
+__pycache__/
+*.py[cod]
 .vscode/
 .idea/
+
+# Local analysis and media-production scratch files
+.tmp_video_frames/
+tmp_contact*/
+tmp_frames/
+tmp_sheets/
+
+# Local development deliverables, presentation work and Windows cache dumps.
+# Keep paths intact for existing tools; these are not public source packages.
+/tmp/
+/output/
+/%SystemDrive%/
+/微信图片_*.jpg
+/微信图片_*.png
+/SF32LB52x_DevKit-40p-define.png
+
+# Portal-only deliverables and large source footage (packed under dist/)
+docs/提交材料/*.mp4
+docs/提交材料/video/
+docs/提交材料/archive/demo_work/demo_clips/
+docs/提交材料/archive/demo_work/*.pdf
+docs/提交材料/archive/supplemental_cursor_logs/
+docs/提交材料/archive/report_work/assets/extra/*
+!docs/提交材料/archive/report_work/assets/extra/05_WiFi页.jpg
+!docs/提交材料/archive/report_work/assets/extra/06_Agent页.jpg
+!docs/提交材料/archive/report_work/assets/extra/08_ESP32模块_正面.jpg
+!docs/提交材料/archive/report_work/assets/extra/11_NO_RADAR.jpg
+!docs/提交材料/archive/report_work/assets/extra/15_MiMo用量统计.png
+docs/提交材料/archive/report_work/*.pdf
+docs/提交材料/archive/report_work/*.docx
+docs/提交材料/archive/report_work/_template_extract.txt
+tools/ld2451/
 
 # Secrets
 .env
@@ -36,14 +82,34 @@ Thumbs.db
 credentials.json
 VMware_share/key.txt
 app/edge_walker/ew_wifi_secret.h
+app/edge_walker/ew_mimo_bootstrap.h
 VMware_share/mailbox/host_to_guest/wifi_join.txt
 
-# Local Cursor / VM share dumps
+# Local Cursor / VM share dumps (skills & hooks stay local — not pushed)
 .cursor/
 VMware_share/artifacts/
-VMware_share/mailbox/status/host_watch_fp.txt
+VMware_share/archive/
+VMware_share/mailbox/
+VMware_share/mailbox/status/
+VMware_share/*.ps1
+VMware_share/*.py
+VMware_share/*.txt
+VMware_share/*.sh
+!VMware_share/README.md
+VMware_share/AGENT_BUS.md
+VMware_share/scripts/
+*.lnk
 
 # NOTE: Do NOT ignore logs/ final AI Coding exports.
 
 # 同步到 VM 编译树的临时暂存目录
 VMware_share/mailbox/host_to_guest/newsrc/
+
+# Fork development scratch and native build products
+/.tmp_defense_*/
+*.obj
+app/edge_walker/*.exe
+
+# Workstation-only utilities; kept in the original workspace and local backup.
+/scripts/host/fetch_chatgpt_share.py
+/scripts/host/fix_vmware_vmnet8_ssh.ps1

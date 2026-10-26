@@ -1,9 +1,12 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Edge Walker Team (contest2026_313_bianyuanxingzhe) */
+
 /****************************************************************************
  * LD2451 解析 + 端侧 policy（F · 王筠昊）
  *
  * 帧格式对齐 HLK 串口协议 V1.03：
  *   头 F4 F3 F2 F1 | 长度(LE,2B) | 体 | 尾 F8 F7 F6 F5
- * 体：目标数(1) + 报警(1) + N×(角/距/方向/速度/SNR 各 1B)
+ * 无目标默认帧体长度为 0；有体时：目标数(1) + 报警(1) + N×5B。
  *
  * 告警接口（改名须三人同意）：
  *   alert_level: NONE | SOFT | STRONG | EMERGENCY
@@ -31,6 +34,16 @@ extern "C" {
 #define EW_LD2451_TAIL3 0xF5
 
 #define EW_LD2451_MAX_TARGETS 5
+
+/* Prototype presets: STANDARD preserves all existing thresholds; EARLY only
+ * increases distance/TTC warning thresholds by 25%. No sensor configuration. */
+typedef enum {
+  EW_SENSITIVITY_STANDARD = 0,
+  EW_SENSITIVITY_EARLY = 1
+} ew_sensitivity_t;
+int ew_sensitivity_set(ew_sensitivity_t value);
+ew_sensitivity_t ew_sensitivity_get(void);
+#define EW_LD2451_MAX_FRAME (10u + 2u + EW_LD2451_MAX_TARGETS * 5u)
 
 /* 雷达串口，全工程唯一定义 */
 #ifndef EW_RADAR_DEV
@@ -88,7 +101,7 @@ typedef struct {
   float speed_kmh;
   float azimuth_deg;
   float snr;
-  float ttc_s; /* <0 表示无效 */
+  float ttc_s; /* 解析器计算值；policy 不信任输入，始终用距离/速度重算。 */
   bool radar_alarm; /* 帧级报警位：与 HLK 手机 App 同源 */
   bool approaching;
   bool valid;
@@ -121,20 +134,38 @@ typedef struct {
   ew_link_t link;
   bool ever_bytes;
   bool ever_frame;
+  /* Retain the observation that owns the held level; a weaker/absent frame
+   * must not attach its distance or reason to a previous emergency. */
+  ew_decision_t latched_decision;
+  ew_decision_t latest_decision;
+  bool have_observation;
 } ew_hold_t;
 
 /* 链路嗅探计数：区分「没接到线」vs「接到了但没靠近目标」。 */
 typedef struct {
   uint32_t bytes_in;       /* 读到的原始字节 */
   uint32_t headers;        /* 看到完整帧头 F4 F3 F2 F1 */
-  uint32_t frames_ok;      /* 头+体+尾完整 */
-  uint32_t frames_bad;     /* 头对上但尾校验失败 */
-  uint32_t frames_empty;   /* 完整帧且目标数=0（或无可解析体） */
+  uint32_t frames_ok;      /* 头+体+尾完整，长度/count/报警/方向合法 */
+  uint32_t frames_bad;     /* 已识别帧头，但长度、结构或尾非法 */
+  uint32_t frames_empty;   /* 完整合法帧且目标数=0 */
   uint32_t frames_targets; /* 完整帧且目标数>0 */
-  uint32_t approaching;    /* 通过只靠近+最小速度过滤 */
+  uint32_t approaching;    /* 有可交付 policy 的目标（含帧级报警回退） */
 } ew_sniff_stats_t;
 
-/* 喂入原始字节流；凑齐一帧并选出有效目标则返回 true。 */
+/* Each UART owner uses its own bounded context. The legacy functions below
+ * share a separate context for diagnostics, not the safety worker's stream. */
+typedef struct {
+  uint8_t buffer[EW_LD2451_MAX_FRAME];
+  uint8_t used;
+  bool header_seen;
+} ew_ld2451_parser_t;
+
+void ew_ld2451_parser_reset(ew_ld2451_parser_t *parser);
+bool ew_ld2451_parser_feed_sniff(ew_ld2451_parser_t *parser,
+                                 const uint8_t *data, unsigned len,
+                                 ew_sniff_stats_t *st, ew_track_t *out);
+
+/* 喂入原始字节流；按等级、TTC、距离选出本批最危险目标则返回 true。 */
 bool ew_ld2451_feed(const uint8_t *data, unsigned len, ew_track_t *out);
 
 /*
@@ -150,7 +181,16 @@ void ew_ld2451_reset(void);
 /* 端侧门限：只靠近 + 最小速度 + SNR + 距离/TTC → 四级告警。不用 LLM。 */
 ew_decision_t ew_decide(const ew_track_t *track);
 
-/* 跨帧保持：连续确认才上告警，空场超时回 NONE。now_ms 用单调时钟。 */
+/* Shared ordering for a frame, a read batch, or several UART reads.
+ * Invalid/missing candidates never replace a current observation. */
+bool ew_track_is_more_urgent(const ew_track_t *candidate,
+                              const ew_track_t *current);
+
+/* Only had_frame=true supplies a fresh observation/confirmation. Repeated
+ * track pointers on no-frame polls are ignored. Fresh empty frames break
+ * confirmation; stale gaps also break it. A held alert upgrades immediately,
+ * but weak frames cannot downgrade it before EW_CLEAR_MS without support at
+ * its current level. now_ms is a wrapping uint32 monotonic millisecond clock. */
 void ew_hold_reset(ew_hold_t *h);
 ew_decision_t ew_hold_update(ew_hold_t *h, uint32_t now_ms,
                              bool had_bytes, bool had_frame,

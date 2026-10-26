@@ -1,0 +1,2 @@
+# Hardware-free host regressions; GCC and Python tkinter are also required.
+pyserial>=3.5,<4

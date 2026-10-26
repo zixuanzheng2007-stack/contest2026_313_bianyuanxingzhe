@@ -1,0 +1,6 @@
+# Source from guest scripts: . "$(dirname "$0")/_env.sh"
+GUEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_NAME="contest2026_313_bianyuanxingzhe"
+OPENVELA_ROOT="${OPENVELA_ROOT:-$HOME/openvela}"
+REPO_ROOT="${REPO_ROOT:-$OPENVELA_ROOT/$REPO_NAME}"
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-/mnt/hgfs/VMware_share/artifacts}"

@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Edge Walker Team (contest2026_313_bianyuanxingzhe) */
+
 /****************************************************************************
  * 预警页：LVGL on /dev/lcd0
  *
@@ -23,15 +26,14 @@
 #ifdef CONFIG_LV_USE_NUTTX
 #include <lvgl/lvgl.h>
 #endif
+#include "ai_agent_ext/ew_alert_ipc.h"
 #include "alert_buzzer.h"
 #include "ew_agent.h"
 #include "ew_chat.h"
 #include "ew_ld2451.h"
+#include "ew_safety.h"
 #include "ew_wifi_at.h"
 #endif
-
-/* 非 UI 进程（NSH 里的 ew alert ...）把请求丢在这里，常驻 UI 下一拍取走 */
-#define EW_ALERT_REQ "/data/ew_alert.req"
 
 /* 取请求文件的间隔：这条路径只服务人工调试，不值得每帧 open 一次 */
 #define EW_REQ_POLL_MS 200u
@@ -48,19 +50,12 @@ static lv_obj_t *g_net_label;
 static bool g_ui_ready;
 static uint32_t g_display_bg = UINT32_MAX;
 
-static int g_radar_fd = -1;
-static ew_hold_t g_hold;
-static ew_sniff_stats_t g_sniff;
-static bool g_hold_inited;
-static uint32_t g_radar_started_ms;
-static ew_alert_level_t g_buzz_level = EW_ALERT_NONE;
-static uint32_t g_buzz_level_ms;
+static pthread_t g_ui_thread;
+static bool g_ui_thread_valid;
 static uint32_t g_last_req_ms;
-
-/* 告警期间每隔这么久重发一次挡位，作为后台 worker 的心跳补偿 */
-#ifndef EW_BUZZ_REPEAT_MS
-#define EW_BUZZ_REPEAT_MS 700u
-#endif
+static bool g_external_active;
+static ew_alert_level_t g_external_level;
+static char g_external_reason[96];
 
 static char g_wifi_status[EW_WIFI_STAT_MAX];
 static volatile int g_wifi_status_dirty;
@@ -152,174 +147,119 @@ static void apply_alert_ui(ew_alert_level_t level, const char *reason)
  * 跨进程告警请求
  ****************************************************************************/
 
-static void queue_request(const char *event_id, const char *source,
-                          ew_alert_level_t level, const char *reason)
+static int queue_request(ew_alert_level_t level, const char *reason,
+                          unsigned long event_id)
 {
-  char line[160];
-  int fd;
-
-  if (event_id != NULL && event_id[0] != '\0') {
-    snprintf(line, sizeof(line), "%d %s %s %s\n", (int)level, event_id,
-             source ? source : "manual", reason ? reason : "");
+  ew_alert_request_t request = {0};
+  int ret;
+  request.level = (int)level;
+  request.event_id = event_id;
+  if (reason != NULL && strlen(reason) >= sizeof(request.reason)) {
+    ret = -EMSGSIZE;
   } else {
-    snprintf(line, sizeof(line), "%d %s\n", (int)level,
-             reason ? reason : "");
+    snprintf(request.reason, sizeof(request.reason), "%s", reason ? reason : "");
+    ret = ew_alert_ipc_publish(&request);
   }
-  fd = open(EW_ALERT_REQ, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-  if (fd < 0) {
-    printf("[alert_lcd] queue open failed errno=%d\n", errno);
-    fflush(stdout);
-    return;
+  printf("[ew_ipc] event_id=%lu stage=%s source=ew result=%d\n",
+         event_id, ret == 0 ? "queued" : "rejected", ret);
+  fflush(stdout);
+  return ret < 0 ? ret : 1;
+}
+
+static int apply_queued_alert(const ew_alert_request_t *request, void *context)
+{
+  if (!g_ui_ready || g_scr == NULL || g_label == NULL) return -EAGAIN;
+  /* Reject attempts to lower a live radar decision. The buzzer has the same
+   * floor independently, even if the UI is stalled or showing another page. */
+  {
+    ew_safety_snapshot_t safety;
+    ew_safety_snapshot(&safety);
+    if (request->level < (int)safety.decision.level) return -EPERM;
   }
-  (void)write(fd, line, strlen(line));
-  close(fd);
+  /* Do not recurse through alert_output -> alert_lcd_show -> queue_request. */
+  alert_buzzer_level((ew_alert_level_t)request->level);
+  g_external_level = (ew_alert_level_t)request->level;
+  snprintf(g_external_reason, sizeof(g_external_reason), "%s", request->reason);
+  g_external_active = request->level != EW_ALERT_NONE;
+  apply_alert_ui((ew_alert_level_t)request->level, request->reason);
+  *(int *)context = 1;
+  printf("[ew_ipc] event_id=%lu stage=applied level=%s\n", request->event_id,
+         ew_alert_level_name((ew_alert_level_t)request->level));
+  fflush(stdout);
+  return 0;
 }
 
 static void poll_request(uint32_t now)
 {
-  char line[160];
-  char event_id[EW_EVENT_ID_SIZE];
-  char source[EW_EVENT_SOURCE_SIZE];
-  char reason[64];
-  const char *sp;
-  ssize_t n;
-  int level_i;
-  int fields;
-  int fd;
+  ew_alert_request_t request;
+  int applied = 0;
+  int ret;
 
-  if (now - g_last_req_ms < EW_REQ_POLL_MS) {
+  if (!g_ui_ready || now - g_last_req_ms < EW_REQ_POLL_MS) {
     return;
   }
   g_last_req_ms = now;
 
-  fd = open(EW_ALERT_REQ, O_RDONLY);
-  if (fd < 0) {
-    return;
-  }
-  n = read(fd, line, sizeof(line) - 1);
-  close(fd);
-  unlink(EW_ALERT_REQ);
-  if (n <= 0) {
-    return;
-  }
-
-  line[n] = '\0';
-  level_i = (int)EW_ALERT_NONE;
-  event_id[0] = '\0';
-  source[0] = '\0';
-  reason[0] = '\0';
-  fields = sscanf(line, "%d %31s %15s %63[^\n]", &level_i, event_id, source,
-                  reason);
-  if (fields >= 3 && strncmp(event_id, "evt-", 4) == 0) {
-    printf("[alert_lcd] ipc event_id=%s source=%s level=%d\n", event_id,
-           source, level_i);
+  ret = ew_alert_ipc_consume(apply_queued_alert, &applied, &request);
+  if (ret != 0) {
+    printf("[ew_ipc] event_id=%lu stage=%s result=%d\n", request.event_id,
+           ret == 1 ? "ack" : (applied ? "ack_failed" : "rejected"),
+           ret == 1 ? 0 : ret);
     fflush(stdout);
-    if (fields < 4) {
-      reason[0] = '\0';
-    }
-  } else if (sscanf(line, "%d %63[^\n]", &level_i, reason) < 1) {
-    return;
   }
-  sp = reason;
-  while (*sp == ' ') {
-    sp++;
-  }
-  apply_alert_ui((ew_alert_level_t)level_i, sp);
 }
 
 /****************************************************************************
  * 雷达
  ****************************************************************************/
 
-static void apply_decision(const ew_decision_t *d, uint32_t now)
+static void render_safety(uint32_t now)
 {
-  char ui_reason[32];
-  int fire;
-
-  if (d->level != EW_ALERT_NONE) {
-    snprintf(ui_reason, sizeof(ui_reason), "R %.1fm", d->range_m);
-    apply_alert_ui(d->level, ui_reason);
-  } else if (d->link == EW_LINK_DEAD) {
-    if (g_hold.ever_frame) {
-      /*
-       * LD2451 在无目标后可能停止上报；没有独立心跳时，静默不能等同
-       * 于拔线。既然本次启动已收到过有效帧，就按正常空闲显示。
-       */
-      apply_alert_ui(EW_ALERT_NONE, NULL);
-    } else if (g_hold.ever_bytes) {
-      apply_alert_ui(EW_ALERT_NONE, "NO FRAME");
-    } else if ((now - g_radar_started_ms) < EW_RADAR_WARMUP_MS) {
-      apply_alert_ui(EW_ALERT_NONE, "RADAR WAIT");
-    } else {
-      apply_alert_ui(EW_ALERT_NONE, "NO RADAR");
-    }
-  } else if (d->link == EW_LINK_NOISE) {
+  ew_safety_snapshot_t safety;
+  ew_safety_snapshot(&safety);
+  if (!g_ui_ready) return;
+  if (g_external_active && g_external_level >= safety.decision.level) {
+    apply_alert_ui(g_external_level, g_external_reason);
+  } else if (!safety.running) {
+    apply_alert_ui(EW_ALERT_NONE, "NO RADAR");
+  } else if (safety.decision.level != EW_ALERT_NONE) {
+    char reason[64];
+    snprintf(reason, sizeof(reason), "R %.1fm", safety.decision.range_m);
+    apply_alert_ui(safety.decision.level, reason);
+  } else if (safety.decision.link == EW_LINK_NOISE) {
     apply_alert_ui(EW_ALERT_NONE, "NO FRAME");
+  } else if (safety.decision.link == EW_LINK_DEAD) {
+    /* Silence after a valid frame cannot prove disconnection or empty road. */
+    apply_alert_ui(EW_ALERT_NONE,
+                   !safety.ever_bytes && now - safety.started_ms < EW_RADAR_WARMUP_MS
+                   ? "RADAR WAIT" : "NO RADAR");
   } else {
     apply_alert_ui(EW_ALERT_NONE, NULL);
   }
-
-  /* 换挡必发；告警持续时按心跳重发，万一 worker 没起来还能补一次波形 */
-  fire = (d->level != g_buzz_level) ||
-         (d->level != EW_ALERT_NONE &&
-          (now - g_buzz_level_ms) >= EW_BUZZ_REPEAT_MS);
-  if (fire) {
-    printf("[alert_lcd] latch %s -> %s range=%.1fm speed=%.1fkm/h "
-           "ttc=%.2fs %s link=%d\n",
-           ew_alert_level_name(g_buzz_level), ew_alert_level_name(d->level),
-           d->range_m, d->speed_kmh, d->ttc_s,
-           d->reason ? d->reason : "", (int)d->link);
-    fflush(stdout);
-    if (d->level != g_buzz_level) {
-      ew_agent_emit_decision(d, EW_EVENT_SOURCE_RADAR);
-    } else {
-      alert_buzzer_level(d->level);
-    }
-    g_buzz_level = d->level;
-    g_buzz_level_ms = now;
-  }
 }
 
-static void poll_radar(uint32_t now)
+void alert_lcd_service_tick(void)
 {
-  uint8_t buf[64];
-  ew_track_t track;
-  ew_decision_t d;
-  const ew_track_t *tp = NULL;
-  bool had_bytes = false;
-  bool had_frame = false;
-
-  if (!g_hold_inited) {
-    ew_hold_reset(&g_hold);
-    memset(&g_sniff, 0, sizeof(g_sniff));
-    g_radar_started_ms = now;
-    g_hold_inited = true;
-  }
-
-  if (g_radar_fd < 0) {
-    g_radar_fd = open(EW_RADAR_DEV, O_RDONLY | O_NONBLOCK);
-  } else {
-    memset(&track, 0, sizeof(track));
-    for (;;) {
-      ew_sniff_stats_t before = g_sniff;
-      ssize_t n = read(g_radar_fd, buf, sizeof(buf));
-
-      if (n <= 0) {
-        break;
-      }
-      had_bytes = true;
-      if (ew_ld2451_feed_sniff(buf, (unsigned)n, &g_sniff, &track) &&
-          track.valid) {
-        tp = &track;
-      }
-      if (g_sniff.frames_ok > before.frames_ok) {
-        had_frame = true;
-      }
+  ew_safety_event_t event;
+  ew_safety_snapshot_t current;
+  unsigned count;
+  uint32_t now = ew_now_ms();
+  g_ui_thread = pthread_self();
+  g_ui_thread_valid = true;
+  /* Telemetry may lag or overflow during a blocked UI. The safety task and
+   * buzzer never wait for it. Never replay old decisions as new actuations. */
+  ew_safety_snapshot(&current);
+  for (count = 0; count < 4 && ew_safety_take_event(&event); count++) {
+    if (event.event_id != current.event_id) {
+      printf("[ew_event] event_id=%lu stage=superseded source=radar\n",
+             event.event_id);
+    } else {
+      (void)ew_agent_emit_decision_event(&event.decision,
+                                         EW_EVENT_SOURCE_RADAR, event.event_id);
     }
   }
-
-  d = ew_hold_update(&g_hold, now, had_bytes, had_frame, tp);
-  apply_decision(&d, now);
+  poll_request(now);
+  render_safety(now);
 }
 
 /****************************************************************************
@@ -446,8 +386,7 @@ void alert_lcd_warn_tick(void)
 {
   uint32_t now = ew_now_ms();
 
-  poll_request(now);
-  poll_radar(now);
+  render_safety(now);
   wifi_status_refresh();
 }
 
@@ -462,23 +401,43 @@ void alert_lcd_detach_warn_ui(void)
 
 void alert_lcd_show(ew_alert_level_t level, const char *reason)
 {
-  alert_lcd_show_event(NULL, NULL, level, reason);
+  alert_lcd_show_event(level, reason, 0);
 }
 
-void alert_lcd_show_event(const char *event_id, const char *source,
-                          ew_alert_level_t level, const char *reason)
+void alert_lcd_show_event(ew_alert_level_t level, const char *reason,
+                          unsigned long event_id)
 {
-  if (event_id != NULL && event_id[0] != '\0') {
-    printf("[alert_lcd] executor event_id=%s source=%s level=%s\n", event_id,
-           source ? source : "", ew_alert_level_name(level));
-    fflush(stdout);
-  }
-  if (g_ui_ready) {
+  (void)alert_lcd_show_event_checked(level, reason, event_id);
+}
+
+int alert_lcd_show_event_checked(ew_alert_level_t level, const char *reason,
+                                 unsigned long event_id)
+{
+  ew_safety_snapshot_t safety;
+  ew_safety_snapshot(&safety);
+  if (level < safety.decision.level) return -EPERM;
+  if (g_ui_ready && g_ui_thread_valid && pthread_equal(pthread_self(), g_ui_thread)) {
+    if (reason != NULL && strlen(reason) >= sizeof(g_external_reason)) return -EMSGSIZE;
+    g_external_level = level;
+    snprintf(g_external_reason, sizeof(g_external_reason), "%s", reason ? reason : "");
+    g_external_active = level != EW_ALERT_NONE;
     apply_alert_ui(level, reason);
-    return;
+    if (event_id != 0) {
+      printf("[ew_event] event_id=%lu stage=actuator actuator=lcd\n", event_id);
+      fflush(stdout);
+    }
+    return 0;
   }
-  /* 常驻 UI 不在本进程（NSH 里手动敲的 ew alert），落盘交给它 */
-  queue_request(event_id, source, level, reason);
+  return queue_request(level, reason, event_id);
+}
+
+int alert_lcd_show_safety_event(ew_alert_level_t level, const char *reason,
+                                unsigned long event_id)
+{
+  (void)level; (void)reason; (void)event_id;
+  if (!g_ui_thread_valid || !pthread_equal(pthread_self(), g_ui_thread)) return -EPERM;
+  render_safety(ew_now_ms());
+  return g_ui_ready ? 0 : 1;
 }
 
 int alert_lcd_info(void)
@@ -568,17 +527,29 @@ void alert_lcd_boot_splash(void)
 
 void alert_lcd_show(ew_alert_level_t level, const char *reason)
 {
+  alert_lcd_show_event(level, reason, 0);
+}
+
+void alert_lcd_show_event(ew_alert_level_t level, const char *reason,
+                          unsigned long event_id)
+{
+  (void)event_id;
   printf("[alert_lcd] stub level=%d reason=%s\n",
          (int)level, reason ? reason : "");
 }
 
-void alert_lcd_show_event(const char *event_id, const char *source,
-                          ew_alert_level_t level, const char *reason)
+int alert_lcd_show_event_checked(ew_alert_level_t level, const char *reason,
+                                 unsigned long event_id)
 {
-  printf("[alert_lcd] stub event_id=%s source=%s level=%d reason=%s\n",
-         event_id ? event_id : "", source ? source : "", (int)level,
-         reason ? reason : "");
+  alert_lcd_show_event(level, reason, event_id);
+  return 0;
 }
+int alert_lcd_show_safety_event(ew_alert_level_t level, const char *reason,
+                                unsigned long event_id)
+{
+  return alert_lcd_show_event_checked(level, reason, event_id);
+}
+void alert_lcd_service_tick(void) {}
 
 void alert_lcd_boot_splash(void)
 {

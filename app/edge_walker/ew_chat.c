@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Edge Walker Team (contest2026_313_bianyuanxingzhe) */
+
 /****************************************************************************
  * LVGL 智能体对话：点按快捷句 + 中/英键盘（无语音）
  ****************************************************************************/
@@ -6,6 +9,7 @@
 #include "ew_serial_ctl.h"
 #include "ew_mirror.h"
 #include "ew_agent.h"
+#include "ew_safety.h"
 #include "ew_llm.h"
 #include "alert_lcd.h"
 #include "ew_pinyin.h"
@@ -29,6 +33,7 @@
 #include <nuttx/input/virtio-input-event-codes.h>
 #ifdef CONFIG_LV_USE_NUTTX
 #include <lvgl/lvgl.h>
+LV_FONT_DECLARE(ew_font_cjk_18);
 #if LV_USE_FREETYPE
 #include <lvgl/src/libs/freetype/lv_freetype.h>
 #endif
@@ -50,6 +55,7 @@
 static lv_obj_t *g_scr;
 static lv_obj_t *g_status;
 static lv_obj_t *g_list;
+static lv_obj_t *g_quick_prompts;
 static lv_obj_t *g_ta;
 static lv_obj_t *g_kb;
 static lv_obj_t *g_ime_bar;
@@ -70,19 +76,24 @@ static bool g_zh;
 static char g_py[32];
 static int g_kbd_fd = -1;
 static int g_shift;
+static char g_remote_text[601];
+static bool g_remote_text_pending;
+static bool g_remote_send_pending;
+static bool g_quick_prompts_visible;
 
 /* 当前页与待切换页。g_page_pending 可被事件回调改写，主循环下一帧生效。 */
 static ew_page_t g_page = EW_PAGE_WARN;
 static volatile ew_page_t g_page_pending = EW_PAGE_WARN;
 
 static void hide_kb_event(lv_event_t *e);
+void ew_ui_sanitize_text(char *s);
 
 /* CJK 字体整段只在 FreeType 打开时才有意义，关掉时界面退回英文 */
 #if LV_USE_FREETYPE
 
 static const char *g_font_paths[] = {
-  "/data/font/MiSans-Regular.ttf",
-  "/data/MiSans-Regular.ttf",
+  "/data/font/SourceHanSansCN-Regular.otf",
+  "/data/font/NotoSansCJKsc-Regular.otf",
   NULL
 };
 
@@ -139,6 +150,20 @@ static void hide_kb(void)
   if (g_ime_bar != NULL) {
     lv_obj_add_flag(g_ime_bar, LV_OBJ_FLAG_HIDDEN);
   }
+  if (g_quick_prompts != NULL && g_quick_prompts_visible) {
+    lv_obj_add_flag(g_quick_prompts, LV_OBJ_FLAG_HIDDEN);
+    g_quick_prompts_visible = false;
+    printf("[ew-chat] quick prompts hidden\n");
+  }
+}
+
+static void show_quick_prompts(void)
+{
+  if (g_quick_prompts != NULL && !g_quick_prompts_visible) {
+    lv_obj_clear_flag(g_quick_prompts, LV_OBJ_FLAG_HIDDEN);
+    g_quick_prompts_visible = true;
+    printf("[ew-chat] quick prompts shown\n");
+  }
 }
 
 static void show_kb(void)
@@ -153,6 +178,7 @@ static void show_kb(void)
 
 static void add_bubble(const char *text, bool user)
 {
+  char render_text[EW_CHAT_TEXT_MAX];
   lv_obj_t *row;
   lv_obj_t *lab;
   lv_color_t bg;
@@ -190,7 +216,9 @@ static void add_bubble(const char *text, bool user)
   apply_font(lab);
   lv_label_set_long_mode(lab, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(lab, lv_pct(100));
-  lv_label_set_text(lab, text);
+  snprintf(render_text, sizeof(render_text), "%s", text);
+  ew_ui_sanitize_text(render_text);
+  lv_label_set_text(lab, render_text);
   lv_obj_set_style_text_color(lab, lv_color_white(), 0);
   lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_flag(row, LV_OBJ_FLAG_EVENT_BUBBLE);
@@ -244,52 +272,111 @@ static const char *local_reply(const char *q)
   return NULL;
 }
 
-/* 去掉 emoji（4 字节 UTF-8），保留中文 */
-static void sanitize_reply(char *s)
+/* Decode one UTF-8 code point so unsupported glyphs can be replaced safely. */
+static uint32_t utf8_next(const unsigned char **cursor)
 {
-  unsigned char *r;
-  unsigned char *w;
-  int n;
+  const unsigned char *p = *cursor;
+  uint32_t codepoint;
+  int continuation;
+
+  if (*p < 0x80) {
+    *cursor = p + 1;
+    return *p;
+  }
+  if ((*p & 0xe0) == 0xc0) {
+    codepoint = *p & 0x1f;
+    continuation = 1;
+  } else if ((*p & 0xf0) == 0xe0) {
+    codepoint = *p & 0x0f;
+    continuation = 2;
+  } else if ((*p & 0xf8) == 0xf0) {
+    codepoint = *p & 0x07;
+    continuation = 3;
+  } else {
+    *cursor = p + 1;
+    return 0xfffd;
+  }
+
+  p++;
+  while (continuation-- > 0) {
+    if ((*p & 0xc0) != 0x80) {
+      *cursor = p;
+      return 0xfffd;
+    }
+    codepoint = (codepoint << 6) | (*p++ & 0x3f);
+  }
+  *cursor = p;
+  return codepoint;
+}
+
+static bool font_has_glyph(uint32_t codepoint)
+{
+  lv_font_glyph_dsc_t glyph;
+
+  if (codepoint == '\n' || codepoint == '\r' || codepoint == '\t') {
+    return true;
+  }
+  return g_font != NULL &&
+         lv_font_get_glyph_dsc(g_font, &glyph, codepoint, 0);
+}
+
+/* Keep dynamic cloud/user text renderable even when it contains emoji,
+ * rare CJK, or malformed UTF-8 outside the embedded competition font. */
+void ew_ui_sanitize_text(char *s)
+{
+  const unsigned char *read;
+  unsigned char *write;
 
   if (s == NULL) {
     return;
   }
-  r = (unsigned char *)s;
-  w = r;
-  while (*r != '\0') {
-    if (*r < 0x80) {
-      *w++ = *r++;
-    } else if (*r >= 0xF0) {
-      n = (*r >= 0xF8) ? 5 : 4;
-      while (n-- > 0 && *r != '\0') {
-        r++;
-      }
-    } else if (*r >= 0xE0) {
-      n = 3;
-      while (n-- > 0 && *r != '\0') {
-        *w++ = *r++;
-      }
+  read = (const unsigned char *)s;
+  write = (unsigned char *)s;
+  while (*read != '\0') {
+    const unsigned char *start = read;
+    uint32_t codepoint = utf8_next(&read);
+    size_t encoded_len = (size_t)(read - start);
+
+    if (font_has_glyph(codepoint)) {
+      memmove(write, start, encoded_len);
+      write += encoded_len;
     } else {
-      n = 2;
-      while (n-- > 0 && *r != '\0') {
-        *w++ = *r++;
-      }
+      *write++ = '?';
     }
   }
-  *w = '\0';
+  *write = '\0';
 }
 
 static void *ask_thread(void *arg)
 {
+  ew_llm_result_t rc;
+
   (void)arg;
   g_reply[0] = '\0';
-  if (ew_llm_ask(g_pending, g_reply, sizeof(g_reply)) != 0) {
-    const char *fb = local_reply(g_pending);
-    if (fb != NULL) {
-      snprintf(g_reply, sizeof(g_reply), "%s", fb);
-    } else {
-      snprintf(g_reply, sizeof(g_reply),
-               "网络问答暂时不可用。可点快捷句，或稍后再问。");
+  rc = ew_llm_ask(g_pending, g_reply, sizeof(g_reply));
+  if (rc != EW_LLM_OK) {
+    switch (rc) {
+      case EW_LLM_ERR_NO_WIFI:
+        snprintf(g_reply, sizeof(g_reply), "Wi-Fi 未连接，请先连接热点。");
+        break;
+      case EW_LLM_ERR_CONFIG:
+        snprintf(g_reply, sizeof(g_reply), "MiMo 尚未配置，请连接电脑控制端补配。");
+        break;
+      case EW_LLM_ERR_AUTH:
+        snprintf(g_reply, sizeof(g_reply), "MiMo 鉴权失败，请检查测试密钥。");
+        break;
+      case EW_LLM_ERR_TLS:
+        snprintf(g_reply, sizeof(g_reply), "MiMo TLS 连接失败，请稍后重试。");
+        break;
+      case EW_LLM_ERR_TIMEOUT:
+        snprintf(g_reply, sizeof(g_reply), "MiMo 请求超时，请稍后重试。");
+        break;
+      case EW_LLM_ERR_AT_BUSY:
+        snprintf(g_reply, sizeof(g_reply), "网络模组忙或无响应，请稍后重试。");
+        break;
+      default:
+        snprintf(g_reply, sizeof(g_reply), "MiMo 返回异常，请稍后重试。");
+        break;
     }
   }
   g_reply_ready = 1;
@@ -335,9 +422,7 @@ static void start_ask(const char *text)
   pthread_attr_init(&attr);
   pthread_attr_setstacksize(&attr, 65536);
   if (pthread_create(&th, &attr, ask_thread, NULL) != 0) {
-    if (ew_llm_ask(g_pending, g_reply, sizeof(g_reply)) != 0) {
-      snprintf(g_reply, sizeof(g_reply), "网络问答暂时不可用，请再试一次或点快捷句。");
-    }
+    snprintf(g_reply, sizeof(g_reply), "系统资源不足，请稍后重试。");
     g_reply_ready = 1;
   } else {
     pthread_detach(th);
@@ -356,6 +441,20 @@ static void send_from_ta(void)
   start_ask(t);
   lv_textarea_set_text(g_ta, "");
   g_py[0] = '\0';
+}
+
+static void apply_remote_pending(void)
+{
+  if (g_ta == NULL || !g_remote_text_pending) {
+    return;
+  }
+  lv_textarea_set_text(g_ta, g_remote_text);
+  g_remote_text_pending = false;
+  g_py[0] = '\0';
+  if (g_remote_send_pending) {
+    g_remote_send_pending = false;
+    send_from_ta();
+  }
 }
 
 static void refresh_cands(void)
@@ -524,6 +623,7 @@ static void send_clicked(lv_event_t *e)
 {
   (void)e;
   send_from_ta();
+  hide_kb();
 }
 
 static void chip_clicked(lv_event_t *e)
@@ -534,6 +634,7 @@ static void chip_clicked(lv_event_t *e)
 static void ta_clicked(lv_event_t *e)
 {
   (void)e;
+  show_quick_prompts();
   show_kb();
 }
 
@@ -837,6 +938,7 @@ static void build_ui(void)
              false);
 
   chips = lv_obj_create(g_scr);
+  g_quick_prompts = chips;
   lv_obj_set_width(chips, lv_pct(100));
   lv_obj_set_height(chips, LV_SIZE_CONTENT);
   lv_obj_set_flex_flow(chips, LV_FLEX_FLOW_ROW_WRAP);
@@ -851,6 +953,8 @@ static void build_ui(void)
   add_chip(chips, "Who are you?");
   add_chip(chips, "How does alert work?");
   add_chip(chips, "Hello");
+  lv_obj_add_flag(chips, LV_OBJ_FLAG_HIDDEN);
+  g_quick_prompts_visible = false;
 
   bar = lv_obj_create(g_scr);
   lv_obj_set_width(bar, lv_pct(100));
@@ -934,7 +1038,7 @@ static void poll_reply(void)
   }
   g_reply_ready = 0;
   g_busy = 0;
-  sanitize_reply(g_reply);
+  ew_ui_sanitize_text(g_reply);
   if (g_wait_bubble != NULL) {
     lv_obj_delete(g_wait_bubble);
     g_wait_bubble = NULL;
@@ -1019,22 +1123,88 @@ void *ew_ui_font(void)
 #endif
 }
 
+int ew_chat_remote_set_text(const char *text)
+{
+#if defined(__NuttX__) && defined(CONFIG_LV_USE_NUTTX)
+  if (g_page == EW_PAGE_WIFI) {
+    return ew_wifi_ui_remote_set_text(text);
+  }
+  if (text == NULL || strlen(text) >= sizeof(g_remote_text)) {
+    return -1;
+  }
+  snprintf(g_remote_text, sizeof(g_remote_text), "%s", text);
+  g_remote_text_pending = true;
+  if (g_page == EW_PAGE_CHAT && g_ta != NULL) {
+    apply_remote_pending();
+  } else {
+    ew_ui_goto(EW_PAGE_CHAT);
+  }
+  return 0;
+#else
+  (void)text;
+  return -1;
+#endif
+}
+
+int ew_chat_remote_key(const char *key)
+{
+#if defined(__NuttX__) && defined(CONFIG_LV_USE_NUTTX)
+  if (key == NULL) {
+    return -1;
+  }
+  if (g_page == EW_PAGE_WIFI) {
+    return ew_wifi_ui_remote_key(key);
+  }
+  if (strcmp(key, "enter") == 0) {
+    if (g_page == EW_PAGE_CHAT && g_ta != NULL) {
+      if (g_remote_text_pending) {
+        apply_remote_pending();
+      } else {
+        send_from_ta();
+      }
+    } else {
+      g_remote_send_pending = true;
+      ew_ui_goto(EW_PAGE_CHAT);
+    }
+    return 0;
+  }
+  if (strcmp(key, "backspace") == 0 &&
+      g_page == EW_PAGE_CHAT && g_ta != NULL) {
+    lv_textarea_delete_char(g_ta);
+    return 0;
+  }
+  if (strcmp(key, "escape") == 0) {
+    hide_kb();
+    ew_ui_goto(EW_PAGE_WARN);
+    return 0;
+  }
+  if (strcmp(key, "tab") == 0 &&
+      g_page == EW_PAGE_CHAT && g_lang_btn != NULL) {
+    lang_clicked(NULL);
+    return 0;
+  }
+  return -1;
+#else
+  (void)key;
+  return -1;
+#endif
+}
+
 #if defined(__NuttX__) && defined(CONFIG_LV_USE_NUTTX)
 
 /* 三个页面共用一份 CJK 字体，从 boot 和 `ew chat` 进来都要先走这里 */
 static void ui_font_init(void)
 {
+  g_font = &ew_font_cjk_18;
+  printf("[ew-chat] embedded GB2312 CJK @18\n");
 #if LV_USE_FREETYPE
-  int w;
+  lv_font_t *external;
 
-  if (g_font != NULL) {
-    return;
+  /* Optional OFL font override; otherwise use the embedded OFL subset. */
+  external = try_cjk_font(18);
+  if (external != NULL) {
+    g_font = external;
   }
-  /* rcS 可能早于 adb push 完整 TTF，等一会儿，但别把开机拖太久 */
-  for (w = 0; w < 10 && !font_ready(g_font_paths[0]); w++) {
-    usleep(500000);
-  }
-  g_font = try_cjk_font(18);
 #endif
 }
 
@@ -1043,6 +1213,7 @@ static void chat_page_build(void)
   g_scr = NULL;
   g_status = NULL;
   g_list = NULL;
+  g_quick_prompts = NULL;
   g_ta = NULL;
   g_kb = NULL;
   g_ime_bar = NULL;
@@ -1051,7 +1222,9 @@ static void chat_page_build(void)
   g_wait_bubble = NULL;
   g_busy = 0;
   g_reply_ready = 0;
+  g_quick_prompts_visible = false;
   build_ui();
+  apply_remote_pending();
 }
 
 static void page_build(ew_page_t page)
@@ -1105,6 +1278,7 @@ static void page_pump(void)
   uint32_t idle;
 
   hw_kbd_poll();
+  alert_lcd_service_tick();
   ew_serial_ctl_poll();
   ew_mirror_tick();
   page_tick(g_page);
@@ -1120,6 +1294,10 @@ static void page_pump(void)
 void ew_ui_loop(int start_in_chat)
 {
 #if defined(__NuttX__) && defined(CONFIG_LV_USE_NUTTX)
+  int safety_result = ew_safety_start();
+  if (safety_result != 0) {
+    printf("[ew-safety] start failed result=%d\n", safety_result);
+  }
   if (!lv_is_initialized()) {
     printf("[ew-ui] LVGL not initialized\n");
     return;

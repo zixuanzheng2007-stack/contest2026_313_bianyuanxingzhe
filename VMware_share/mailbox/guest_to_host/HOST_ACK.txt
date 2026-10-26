@@ -1,1 +1,0 @@
-ACK: disk fixed; git ok; sync in progress observed; waiting REPLY_002 with nuttx.bin

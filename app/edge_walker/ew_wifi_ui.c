@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Edge Walker Team (contest2026_313_bianyuanxingzhe) */
+
 /****************************************************************************
  * WiFi 配网页（LVGL）
  *
@@ -21,8 +24,10 @@
 
 typedef enum {
   JOB_IDLE = 0,
-  JOB_REFRESH,      /* 查链路状态 + 扫描 */
-  JOB_JOIN
+  JOB_STATUS,       /* 只查 CWJAP?/CIPSTA?，不探公网、不扫描 */
+  JOB_SCAN,         /* 仅用户点击 Scan 时执行 */
+  JOB_JOIN,
+  JOB_FORGET
 } ew_job_t;
 
 static lv_obj_t *g_list;
@@ -33,17 +38,20 @@ static lv_obj_t *g_ssid_ta;
 static lv_obj_t *g_pw_ta;
 static lv_obj_t *g_pw_title;
 static lv_obj_t *g_pw_kb;
+static lv_obj_t *g_pw_field;
 static lv_obj_t *g_pw_sw;
 static int g_pw_reveal;
 
 static ew_wifi_ap_t g_aps[EW_WIFI_SCAN_MAX];
 static int g_ap_count;
+static int g_scan_completed;
 static char g_sel_ssid[EW_WIFI_SSID_MAX];
 static char g_status_text[72];
 static char g_saved_ssid[EW_WIFI_SSID_MAX];
 
 static volatile ew_job_t g_job;
 static volatile int g_job_done;
+static int g_job_result;
 static char g_job_pass[EW_WIFI_PASS_MAX];
 
 static void use_font(lv_obj_t *obj)
@@ -55,41 +63,77 @@ static void use_font(lv_obj_t *obj)
   }
 }
 
+static void set_dynamic_text(lv_obj_t *label, const char *text)
+{
+  char render_text[160];
+
+  snprintf(render_text, sizeof(render_text), "%s", text ? text : "");
+  ew_ui_sanitize_text(render_text);
+  lv_label_set_text(label, render_text);
+}
+
 /****************************************************************************
  * 后台作业
  ****************************************************************************/
 
 static void *job_thread(void *arg)
 {
+  ew_job_t job = g_job;
+
   (void)arg;
 
-  if (g_job == JOB_JOIN) {
-    (void)ew_wifi_join(g_sel_ssid, g_job_pass, g_status_text,
-                       sizeof(g_status_text));
+  if (job == JOB_JOIN) {
+    g_job_result = ew_wifi_join(g_sel_ssid, g_job_pass, g_status_text,
+                                sizeof(g_status_text));
     memset(g_job_pass, 0, sizeof(g_job_pass));
-  } else {
+  } else if (job == JOB_FORGET) {
+    g_job_result = ew_wifi_forget();
+    snprintf(g_status_text, sizeof(g_status_text), "%s",
+             g_job_result == 0 ? "disconnected - saved network removed"
+                               : "disconnect failed - network kept");
+  } else if (job == JOB_SCAN) {
+    ew_wifi_ap_t scanned[EW_WIFI_SCAN_MAX];
     char ip[24];
     int n;
     ew_wifi_state_t st;
 
-    /* 先扫描再查链路：避免 probe+scan 各 wake 一次、且 probe 失败时仍出列表 */
-    g_ap_count = 0;
-    n = ew_wifi_scan(g_aps, EW_WIFI_SCAN_MAX);
-    if (n > 0) {
+    ew_wifi_scan_hint_clear();
+    if (g_saved_ssid[0] != '\0') {
+      (void)ew_wifi_scan_hint_add(g_saved_ssid);
+    }
+    if (g_sel_ssid[0] != '\0' &&
+        strcmp(g_sel_ssid, g_saved_ssid) != 0) {
+      (void)ew_wifi_scan_hint_add(g_sel_ssid);
+    }
+    n = ew_wifi_scan(scanned, EW_WIFI_SCAN_MAX);
+    if (n >= 0) {
+      if (n > 0) {
+        memcpy(g_aps, scanned, (size_t)n * sizeof(g_aps[0]));
+      }
       g_ap_count = n;
+      g_scan_completed = 1;
     }
 
+    if (n < 0) {
+      if (n == EW_WIFI_SCAN_BUSY) {
+        snprintf(g_status_text, sizeof(g_status_text), "scan already running");
+      } else {
+        snprintf(g_status_text, sizeof(g_status_text),
+                 g_ap_count > 0 ? "modem error - showing last results"
+                                : "modem not responding");
+      }
+      g_job_done = 1;
+      return NULL;
+    }
     st = ew_wifi_probe(0, ip, sizeof(ip));
     if (st == EW_WIFI_DOWN && g_ap_count > 0) {
       st = EW_WIFI_IDLE;
     }
 
     switch (st) {
-      case EW_WIFI_ONLINE:
-        snprintf(g_status_text, sizeof(g_status_text), "ONLINE  %s", ip);
-        break;
       case EW_WIFI_JOINED:
-        snprintf(g_status_text, sizeof(g_status_text), "LAN ONLY  %s", ip);
+      case EW_WIFI_ONLINE:
+        snprintf(g_status_text, sizeof(g_status_text), "CONNECTED  %s", ip);
         break;
       case EW_WIFI_IDLE:
         if (g_ap_count > 0) {
@@ -108,6 +152,22 @@ static void *job_thread(void *arg)
         }
         break;
     }
+  } else {
+    char ip[24];
+    ew_wifi_state_t st = ew_wifi_probe(0, ip, sizeof(ip));
+
+    switch (st) {
+      case EW_WIFI_JOINED:
+      case EW_WIFI_ONLINE:
+        snprintf(g_status_text, sizeof(g_status_text), "CONNECTED  %s", ip);
+        break;
+      case EW_WIFI_IDLE:
+        snprintf(g_status_text, sizeof(g_status_text), "not connected");
+        break;
+      default:
+        snprintf(g_status_text, sizeof(g_status_text), "modem not responding");
+        break;
+    }
   }
 
   g_job_done = 1;
@@ -124,9 +184,10 @@ static void job_start(ew_job_t job, const char *busy_text)
   }
   g_job = job;
   g_job_done = 0;
+  g_job_result = -1;
   snprintf(g_status_text, sizeof(g_status_text), "%s", busy_text);
   if (g_status != NULL) {
-    lv_label_set_text(g_status, g_status_text);
+    set_dynamic_text(g_status, g_status_text);
   }
   if (g_scan_btn != NULL) {
     lv_obj_add_state(g_scan_btn, LV_STATE_DISABLED);
@@ -204,6 +265,7 @@ static void pw_field_cb(lv_event_t *e)
 {
   lv_obj_t *field = lv_event_get_target_obj(e);
 
+  g_pw_field = field;
   if (g_pw_kb != NULL) {
     lv_keyboard_set_textarea(g_pw_kb, field);
   }
@@ -212,17 +274,30 @@ static void pw_field_cb(lv_event_t *e)
 
 static void pw_open(const char *ssid)
 {
+  int selected;
+
   if (g_pw_layer == NULL) {
     return;
   }
   snprintf(g_sel_ssid, sizeof(g_sel_ssid), "%s", ssid ? ssid : "");
+  selected = g_sel_ssid[0] != '\0';
   if (g_pw_title != NULL) {
-    lv_label_set_text(g_pw_title,
-                      g_sel_ssid[0] ? "network credentials"
-                                    : "enter network manually");
+    if (selected) {
+      char title[EW_WIFI_SSID_MAX + 16];
+
+      snprintf(title, sizeof(title), "connect: %s", g_sel_ssid);
+      set_dynamic_text(g_pw_title, title);
+    } else {
+      lv_label_set_text(g_pw_title, "enter hidden network");
+    }
   }
   if (g_ssid_ta != NULL) {
     lv_textarea_set_text(g_ssid_ta, g_sel_ssid);
+    if (selected) {
+      lv_obj_add_flag(g_ssid_ta, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_remove_flag(g_ssid_ta, LV_OBJ_FLAG_HIDDEN);
+    }
   }
   if (g_pw_ta != NULL) {
     lv_textarea_set_text(g_pw_ta, "");
@@ -236,8 +311,9 @@ static void pw_open(const char *ssid)
     }
   }
   if (g_pw_kb != NULL) {
-    lv_obj_t *field = g_sel_ssid[0] ? g_pw_ta : g_ssid_ta;
+    lv_obj_t *field = selected ? g_pw_ta : g_ssid_ta;
 
+    g_pw_field = field;
     lv_keyboard_set_textarea(g_pw_kb, field);
     lv_obj_add_state(field, LV_STATE_FOCUSED);
   }
@@ -377,7 +453,7 @@ static void ap_clicked_cb(lv_event_t *e)
 static void scan_cb(lv_event_t *e)
 {
   (void)e;
-  job_start(JOB_REFRESH, "scanning...");
+  job_start(JOB_SCAN, "scanning...");
 }
 
 static void manual_cb(lv_event_t *e)
@@ -395,12 +471,7 @@ static void back_cb(lv_event_t *e)
 static void forget_cb(lv_event_t *e)
 {
   (void)e;
-  if (g_job != JOB_IDLE) {
-    return;
-  }
-  (void)ew_wifi_forget();
-  g_saved_ssid[0] = '\0';
-  job_start(JOB_REFRESH, "cleared, rescanning...");
+  job_start(JOB_FORGET, "disconnecting...");
 }
 
 static lv_obj_t *add_row_button(const char *text, lv_event_cb_t cb, void *ud)
@@ -415,7 +486,7 @@ static lv_obj_t *add_row_button(const char *text, lv_event_cb_t cb, void *ud)
   lv_obj_set_style_pad_hor(btn, 8, 0);
   lab = lv_label_create(btn);
   use_font(lab);
-  lv_label_set_text(lab, text);
+  set_dynamic_text(lab, text);
   lv_label_set_long_mode(lab, LV_LABEL_LONG_DOT);
   lv_obj_set_width(lab, lv_pct(100));
   lv_obj_align(lab, LV_ALIGN_LEFT_MID, 0, 0);
@@ -435,17 +506,22 @@ static void refresh_list(void)
   }
   lv_obj_clean(g_list);
 
-  add_row_button("+ enter SSID manually", manual_cb, NULL);
-
   if (g_ap_count == 0) {
     lv_obj_t *lab = lv_label_create(g_list);
 
     use_font(lab);
-    lv_label_set_text(lab,
-                      "no AP in scan - use manual SSID below\n"
-                      "(phone hotspot may not broadcast)");
+    if (g_job == JOB_SCAN) {
+      lv_label_set_text(lab, "scanning nearby 2.4 GHz networks...");
+    } else if (!g_scan_completed) {
+      lv_label_set_text(lab, "tap scan to find nearby 2.4 GHz networks");
+    } else {
+      lv_label_set_text(lab,
+                        "no 2.4 GHz network found\n"
+                        "check hotspot band, then tap scan");
+    }
     lv_obj_set_style_text_color(lab, lv_color_hex(0x9FB4DC), 0);
     lv_obj_set_style_pad_ver(lab, 8, 0);
+    add_row_button("+ hidden network / manual SSID", manual_cb, NULL);
     return;
   }
 
@@ -470,6 +546,8 @@ static void refresh_list(void)
 
     add_row_button(text, ap_clicked_cb, (void *)(intptr_t)i);
   }
+
+  add_row_button("+ hidden network / manual SSID", manual_cb, NULL);
 }
 
 void ew_wifi_ui_build(void)
@@ -487,6 +565,7 @@ void ew_wifi_ui_build(void)
   g_pw_ta = NULL;
   g_pw_title = NULL;
   g_pw_kb = NULL;
+  g_pw_field = NULL;
   g_pw_sw = NULL;
 
   if (ew_wifi_cred_load(g_saved_ssid, sizeof(g_saved_ssid), NULL, 0) != 0) {
@@ -564,35 +643,38 @@ void ew_wifi_ui_build(void)
   lv_obj_add_event_cb(btn, forget_cb, LV_EVENT_CLICKED, NULL);
 
   build_pw_layer(scr);
-  refresh_list();
-
   if (g_job == JOB_IDLE) {
-    /* 进页即刷新一次，用户不用先点 scan */
-    job_start(JOB_REFRESH, "scanning...");
+    job_start(JOB_STATUS, "checking connection...");
   } else {
     /* 上次离页时作业还没跑完，等它的结果落到 tick 里 */
-    lv_label_set_text(g_status, g_status_text);
+    set_dynamic_text(g_status, g_status_text);
     lv_obj_add_state(g_scan_btn, LV_STATE_DISABLED);
   }
+  refresh_list();
 }
 
 void ew_wifi_ui_tick(void)
 {
   int was_join;
+  int was_forget;
 
   if (!g_job_done) {
     return;
   }
   g_job_done = 0;
   was_join = (g_job == JOB_JOIN);
+  was_forget = (g_job == JOB_FORGET);
 
   if (g_status != NULL) {
-    lv_label_set_text(g_status, g_status_text);
+    set_dynamic_text(g_status, g_status_text);
   }
   if (was_join) {
     if (ew_wifi_cred_load(g_saved_ssid, sizeof(g_saved_ssid), NULL, 0) != 0) {
       g_saved_ssid[0] = '\0';
     }
+  }
+  if (was_forget && g_job_result == 0) {
+    g_saved_ssid[0] = '\0';
   }
   g_job = JOB_IDLE;
 
@@ -601,9 +683,7 @@ void ew_wifi_ui_tick(void)
   }
   refresh_list();
 
-  if (was_join) {
-    job_start(JOB_REFRESH, "updating...");
-  }
+  /* 连接成功后不要立刻扫描；扫描会增加延迟，旧实现还会断开刚建立的链路。 */
 }
 
 void ew_wifi_ui_teardown(void)
@@ -617,8 +697,40 @@ void ew_wifi_ui_teardown(void)
   g_pw_ta = NULL;
   g_pw_title = NULL;
   g_pw_kb = NULL;
+  g_pw_field = NULL;
   g_pw_sw = NULL;
   memset(g_job_pass, 0, sizeof(g_job_pass));
+}
+
+int ew_wifi_ui_remote_set_text(const char *text)
+{
+  if (text == NULL || g_pw_layer == NULL || g_pw_field == NULL ||
+      lv_obj_has_flag(g_pw_layer, LV_OBJ_FLAG_HIDDEN)) {
+    return -1;
+  }
+  lv_textarea_set_text(g_pw_field, text);
+  return 0;
+}
+
+int ew_wifi_ui_remote_key(const char *key)
+{
+  if (key == NULL || g_pw_layer == NULL || g_pw_field == NULL ||
+      lv_obj_has_flag(g_pw_layer, LV_OBJ_FLAG_HIDDEN)) {
+    return -1;
+  }
+  if (strcmp(key, "enter") == 0) {
+    pw_connect_cb(NULL);
+    return 0;
+  }
+  if (strcmp(key, "backspace") == 0) {
+    lv_textarea_delete_char(g_pw_field);
+    return 0;
+  }
+  if (strcmp(key, "escape") == 0) {
+    pw_close();
+    return 0;
+  }
+  return -1;
 }
 
 #else /* 没有 LVGL 的构建 */
@@ -633,6 +745,18 @@ void ew_wifi_ui_tick(void)
 
 void ew_wifi_ui_teardown(void)
 {
+}
+
+int ew_wifi_ui_remote_set_text(const char *text)
+{
+  (void)text;
+  return -1;
+}
+
+int ew_wifi_ui_remote_key(const char *key)
+{
+  (void)key;
+  return -1;
 }
 
 #endif

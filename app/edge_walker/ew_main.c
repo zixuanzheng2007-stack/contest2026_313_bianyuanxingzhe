@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Edge Walker Team (contest2026_313_bianyuanxingzhe) */
+
 /****************************************************************************
  * 边缘行者主程序（郑子轩）
  *
@@ -12,6 +15,7 @@
 #include "ew_llm.h"
 #include "ew_wifi_at.h"
 #include "ew_agent.h"
+#include "ew_safety.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,28 +29,36 @@
 
 static int cmd_alert(int argc, char **argv)
 {
-  ew_decision_t d;
-
-  memset(&d, 0, sizeof(d));
-  d.level = EW_ALERT_SOFT;
-  d.reason = "manual_test";
+  ew_alert_level_t level = EW_ALERT_SOFT;
+  const char *reason = "manual_test";
 
   if (argc >= 3) {
     if (strcmp(argv[2], "none") == 0 || strcmp(argv[2], "0") == 0) {
-      d.level = EW_ALERT_NONE;
+      level = EW_ALERT_NONE;
     } else if (strcmp(argv[2], "strong") == 0 || strcmp(argv[2], "2") == 0) {
-      d.level = EW_ALERT_STRONG;
+      level = EW_ALERT_STRONG;
     } else if (strcmp(argv[2], "crit") == 0 || strcmp(argv[2], "3") == 0) {
-      d.level = EW_ALERT_EMERGENCY;
+      level = EW_ALERT_EMERGENCY;
+    } else if (strcmp(argv[2], "soft") == 0 || strcmp(argv[2], "1") == 0) {
+      level = EW_ALERT_SOFT;
+    } else if (strcmp(argv[2], "emergency") == 0) {
+      level = EW_ALERT_EMERGENCY;
     } else {
-      d.level = EW_ALERT_SOFT;
+      printf("[ew] invalid alert level\n");
+      return 1;
     }
   }
   if (argc >= 4) {
-    d.reason = argv[3];
+    reason = argv[3];
   }
 
-  return ew_agent_emit_decision(&d, EW_EVENT_SOURCE_MANUAL);
+  {
+    ew_decision_t decision = {0};
+    decision.level = level;
+    decision.ttc_s = -1.0f;
+    decision.reason = reason;
+    return ew_agent_emit_decision(&decision, EW_EVENT_SOURCE_MANUAL);
+  }
 }
 
 static int cmd_buzz(int argc, char **argv)
@@ -85,6 +97,74 @@ static int cmd_fake(int argc, char **argv)
   return ew_agent_emit_decision(&d, EW_EVENT_SOURCE_FAKE);
 }
 
+/* NSH 可能把带空格 SSID 拆成多个 argv，合并 [from..to] 后再 parse_cli_token */
+static void join_argv_tokens(int argc, char **argv, int from, int to,
+                             char *out, unsigned out_sz)
+{
+  int i;
+  unsigned n = 0;
+
+  if (out_sz == 0) {
+    return;
+  }
+  out[0] = '\0';
+  if (from > to || from >= argc) {
+    return;
+  }
+  if (to >= argc) {
+    to = argc - 1;
+  }
+  for (i = from; i <= to; i++) {
+    const char *s = argv[i];
+    size_t len;
+
+    if (s == NULL) {
+      continue;
+    }
+    len = strlen(s);
+    if (i > from && n + 1 < out_sz) {
+      out[n++] = ' ';
+    }
+    if (n + len + 1 > out_sz) {
+      len = out_sz - n - 1;
+    }
+    memcpy(out + n, s, len);
+    n += len;
+    out[n] = '\0';
+  }
+}
+
+static void parse_cli_token(const char *arg, char *out, unsigned out_sz)
+{
+  const char *p = arg;
+  unsigned n = 0;
+
+  if (out_sz == 0) {
+    return;
+  }
+  out[0] = '\0';
+  if (arg == NULL) {
+    return;
+  }
+  while (*p != '\0' && (*p == ' ' || *p == '\t')) {
+    p++;
+  }
+  if (*p == '"') {
+    p++;
+    while (*p != '\0' && *p != '"' && n + 1 < out_sz) {
+      out[n++] = *p++;
+    }
+    if (*p == '"') {
+      p++;
+    }
+  } else {
+    while (*p != '\0' && *p != ' ' && *p != '\t' && n + 1 < out_sz) {
+      out[n++] = *p++;
+    }
+  }
+  out[n] = '\0';
+}
+
 static int cmd_wifi(int argc, char **argv)
 {
   static const char *state_name[] = {
@@ -111,16 +191,47 @@ static int cmd_wifi(int argc, char **argv)
   }
 
   if (strcmp(sub, "join") == 0) {
+    char ssid[EW_WIFI_SSID_MAX];
+    char pass[EW_WIFI_PASS_MAX];
+    char raw[EW_WIFI_SSID_MAX * 2];
     int rc;
 
     if (argc < 4) {
       printf("usage: ew wifi join <ssid> [password]\n");
+      printf("  ssid with spaces: ew wifi join \"Pura 80 Pro+\" pass\n");
       return 1;
     }
-    rc = ew_wifi_join(argv[3], (argc >= 5) ? argv[4] : "", status,
-                      sizeof(status));
+    if (argc >= 5) {
+      join_argv_tokens(argc, argv, 3, argc - 2, raw, sizeof(raw));
+      parse_cli_token(raw, ssid, sizeof(ssid));
+      parse_cli_token(argv[argc - 1], pass, sizeof(pass));
+    } else {
+      parse_cli_token(argv[3], ssid, sizeof(ssid));
+      pass[0] = '\0';
+    }
+    rc = ew_wifi_join(ssid, pass, status, sizeof(status));
     printf("[ew-wifi] %s\n", status);
     return rc;
+  }
+
+  if (strcmp(sub, "probe") == 0) {
+    ew_wifi_ap_t ap;
+    char raw[EW_WIFI_SSID_MAX * 2];
+
+    if (argc < 4) {
+      printf("usage: ew wifi probe <ssid>\n");
+      printf("  ew wifi probe \"Pura 80 Pro+\"\n");
+      return 1;
+    }
+    join_argv_tokens(argc, argv, 3, argc - 1, raw, sizeof(raw));
+    parse_cli_token(raw, status, sizeof(status));
+    if (ew_wifi_probe_ssid(status, &ap) != 0) {
+      printf("[ew-wifi] probe miss: %s\n", status);
+      return 1;
+    }
+    printf("[ew-wifi] probe hit: %s  %d dBm  %s\n", ap.ssid, ap.rssi,
+           ap.open ? "open" : "locked");
+    return 0;
   }
 
   if (strcmp(sub, "forget") == 0) {
@@ -128,7 +239,7 @@ static int cmd_wifi(int argc, char **argv)
   }
 
   if (strcmp(sub, "ping") == 0) {
-    return ew_wifi_at_ping();
+    return ew_wifi_at_diag();
   }
 
   if (strcmp(sub, "raw") == 0) {
@@ -163,59 +274,29 @@ static int cmd_ask(int argc, char **argv)
 static int cmd_loop(void)
 {
 #ifdef __NuttX__
-  uint8_t buf[64];
-  ew_track_t track;
-  ew_hold_t hold;
-  ew_sniff_stats_t sniff;
-  ew_alert_level_t last = EW_ALERT_NONE;
-  int fd = open(EW_RADAR_DEV, O_RDONLY);
-
-  if (fd < 0) {
-    printf("[ew] open %s failed\n", EW_RADAR_DEV);
+  ew_alert_level_t last = (ew_alert_level_t)-1;
+  ew_link_t last_link = (ew_link_t)-1;
+  int ret = ew_safety_start();
+  if (ret != 0) {
+    printf("[ew-safety] start failed result=%d\n", ret);
     return 1;
   }
-
-  ew_hold_reset(&hold);
-  memset(&sniff, 0, sizeof(sniff));
-  printf("[ew] reading %s, Ctrl-C to stop\n", EW_RADAR_DEV);
-
+  printf("[ew] observing independent radar safety task on %s\n", EW_RADAR_DEV);
   for (;;) {
-    ew_sniff_stats_t before = sniff;
-    const ew_track_t *tp = NULL;
-    bool had_bytes = false;
-    bool had_frame = false;
-    ew_decision_t d;
-    struct timespec ts;
-    uint32_t now = 0;
-    int n = read(fd, buf, sizeof(buf));
-
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
-      now = (uint32_t)((uint64_t)ts.tv_sec * 1000u +
-                       (uint64_t)ts.tv_nsec / 1000000u);
+    ew_safety_snapshot_t safety;
+    ew_safety_snapshot(&safety);
+    if (safety.decision.level != last || safety.decision.link != last_link) {
+      printf("[ew] safety %s range=%.1fm %s link=%d frames=%lu error=%d\n",
+             ew_alert_level_name(safety.decision.level), safety.decision.range_m,
+             safety.decision.reason, (int)safety.decision.link,
+             (unsigned long)safety.sniff.frames_ok, safety.radar_error);
+      last = safety.decision.level;
+      last_link = safety.decision.link;
     }
-
-    if (n > 0) {
-      had_bytes = true;
-      memset(&track, 0, sizeof(track));
-      if (ew_ld2451_feed_sniff(buf, (unsigned)n, &sniff, &track) &&
-          track.valid) {
-        tp = &track;
-      }
-      had_frame = (sniff.frames_ok > before.frames_ok);
-    } else {
-      usleep(20000);
-    }
-
-    d = ew_hold_update(&hold, now, had_bytes, had_frame, tp);
-    if (d.level != last) {
-      printf("[ew] latch %s range=%.1fm %s link=%d\n",
-             ew_alert_level_name(d.level), d.range_m, d.reason, (int)d.link);
-      ew_agent_emit_decision(&d, EW_EVENT_SOURCE_RADAR);
-      last = d.level;
-    }
+    usleep(20000);
   }
 #else
-  printf("[ew] host stub: try `ew fake 10 2` or `ew alert soft`\n");
+  printf("[ew] host stub: try `ew fake 10 20` or `ew alert soft`\n");
 #endif
   return 0;
 }
@@ -233,8 +314,10 @@ static int cmd_help(void)
   printf("  ew wifi                     link state + saved ssid\n");
   printf("  ew wifi scan                list nearby networks\n");
   printf("  ew wifi join <ssid> [pass]  connect and remember\n");
+  printf("  ew wifi probe <ssid>        directed scan one SSID\n");
   printf("  ew wifi forget              drop saved credentials\n");
-  printf("  ew wifi ping|raw            AT handshake / CWJAP?+CIFSR\n");
+  printf("  ew wifi ping                MODEM/WiFi/LAN/ONLINE layered check\n");
+  printf("  ew wifi raw                 AT+GMR/CWMODE?/CWJAP?/CIPSTA?\n");
   printf("  ew at <cmd>                 raw AT, e.g. ew at AT+CIFSR\n");
   printf("  ew ask <text>               one-shot LLM question\n");
   return 0;

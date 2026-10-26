@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Git pre-push: rebase onto upstream before push (see scripts/git/pre_push_rebase.sh)
+set -e
+# The fork is the development remote. Competition changes go through review/PR.
+PUSH_URL="${2:-}"
+if [[ "${1:-}" == "upstream" || "${PUSH_URL,,}" =~ (^|[/:])open-vela/contest2026_313_bianyuanxingzhe(\.git)?/?$ ]]; then
+  echo "Direct competition pushes are blocked. Push to your fork and submit a reviewed PR." >&2
+  exit 1
+fi
+ROOT="$(git rev-parse --show-toplevel)"
+exec bash "$ROOT/scripts/git/pre_push_rebase.sh"

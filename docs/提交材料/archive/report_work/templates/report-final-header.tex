@@ -1,0 +1,32 @@
+% 技术报告定稿 · pandoc xelatex 页眉页脚与封面
+\usepackage{ctex}
+\usepackage{fancyhdr}
+\usepackage{graphicx}
+\usepackage{float}
+\floatplacement{figure}{H}
+
+\pagestyle{fancy}
+\fancyhead[L]{}
+\fancyhead[R]{\small 边缘行者 · 技术报告}
+\fancyfoot[C]{— \thepage —}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancypagestyle{plain}{\pagestyle{fancy}}
+
+\AtBeginDocument{%
+\begin{titlepage}
+  \centering
+  \vspace*{2.8cm}
+  {\Huge\bfseries 边缘行者\par}
+  \vspace{0.8cm}
+  {\Large 基于 openvela 的端侧毫米波接近预警与 AI Agent 原型\par}
+  \vfill
+  {\large 2026 openvela AI 硬件开发者大赛\par}
+  {\large 提交作品技术报告\par}
+  \vspace{1.2cm}
+  {\large 队伍：边缘行者（contest2026\_313\_bianyuanxingzhe）\par}
+  {\large 成员：郑子轩、王筠昊、韦政宇\par}
+  {\large 指导教师：修佳鹏\par}
+  \vspace{0.6cm}
+  {\large 2026 年 9 月\par}
+\end{titlepage}
+}

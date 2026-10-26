@@ -1,0 +1,54 @@
+--- a/chips/sf32lb52/sifli_uart.c
++++ b/chips/sf32lb52/sifli_uart.c
+@@ -56,6 +56,10 @@
+ int uart_isr(int irq, FAR void *context, FAR void *arg);
+ int uart_dma_isr(int irq, FAR void *context, FAR void *arg);
+ 
++static volatile unsigned wifi_ore;
++static volatile unsigned wifi_fe;
++static volatile unsigned wifi_ne;
++
+ #define SIFLI_UART_DMA_CACHE_ALIGN 32
+ 
+ #include "dma_config.h"
+@@ -654,6 +658,12 @@
+ {
+     struct sifli_uart *uart = (struct sifli_uart *)dev->priv;
+ 
++    if (uart->handle.Instance == hwp_usart3)
++    {
++        printf("[wifi-uart] overrun=%u frame=%u noise=%u\n",
++               wifi_ore, wifi_fe, wifi_ne);
++    }
++
+     /* Disable interrupts */
+     HAL_UART_DeInit(&uart->handle);
+ }
+@@ -756,14 +766,17 @@
+     /* Clear error flags first to prevent data loss */
+     if (__HAL_UART_GET_FLAG(&(uart->handle), UART_FLAG_ORE) != RESET)
+     {
++        if (uart->handle.Instance == hwp_usart3) wifi_ore++;
+         __HAL_UART_CLEAR_OREFLAG(&uart->handle);
+     }
+     if (__HAL_UART_GET_FLAG(&(uart->handle), UART_FLAG_NE) != RESET)
+     {
++        if (uart->handle.Instance == hwp_usart3) wifi_ne++;
+         __HAL_UART_CLEAR_NEFLAG(&uart->handle);
+     }
+     if (__HAL_UART_GET_FLAG(&(uart->handle), UART_FLAG_FE) != RESET)
+     {
++        if (uart->handle.Instance == hwp_usart3) wifi_fe++;
+         __HAL_UART_CLEAR_FEFLAG(&uart->handle);
+     }
+     if (__HAL_UART_GET_FLAG(&(uart->handle), UART_FLAG_PE) != RESET)
+@@ -772,7 +785,8 @@
+     }
+ 
+     /* UART in mode Receiver -------------------------------------------------*/
+-    if (__HAL_UART_GET_FLAG(&(uart->handle), UART_FLAG_RXNE) != RESET)
++    if (!uart->uart_rx_dma_flag &&
++        __HAL_UART_GET_FLAG(&(uart->handle), UART_FLAG_RXNE) != RESET)
+     {
+         uart_recvchars(&(uart->serial));
+     }

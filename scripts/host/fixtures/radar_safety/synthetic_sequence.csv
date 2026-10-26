@@ -1,0 +1,11 @@
+# SYNTHETIC regression bytes; generated cases, not road captures or hardware measurements.
+# Schema: timestamp_ms is uint32 milliseconds; raw_hex is UART bytes; empty hex advances time.
+timestamp_ms,raw_hex
+0,12 34
+10,F4 F3 F2 F1 07 00 01 00
+20,80 16 00 14 1E F8 F7 F6 F5
+30,F4 F3 F2 F1 0C 00 02 00 80 0C 00 05 1E 80 14 00 78 1E F8 F7 F6 F5
+40,F4 F3 F2 F1 02 00 00 00 F8 F7 F6 F5
+1029,
+1030,
+1541,

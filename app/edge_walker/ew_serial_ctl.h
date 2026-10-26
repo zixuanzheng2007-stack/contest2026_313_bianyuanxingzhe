@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Edge Walker Team (contest2026_313_bianyuanxingzhe) */
+
 /****************************************************************************
  * UI 运行时串口 @ 远程控制（PC 面板 / 虚拟遥控，无需 NSH 提示符）
  *

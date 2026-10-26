@@ -1,0 +1,62 @@
+Edge Walker (contest2026_313_bianyuanxingzhe)
+Copyright 2026 Edge Walker Team
+
+This repository contains original application code for the 2026 openvela AI
+Hardware Developer Contest. It is licensed under the Apache License, Version
+2.0 (see LICENSE).
+
+Third-Party Components and References
+-------------------------------------
+
+Compile-time dependencies (obtained via openvela repo sync, not vendored here):
+
+  * openvela / Apache NuttX — Apache License 2.0
+    https://github.com/open-vela/openvela
+
+  * LVGL — MIT License
+    https://github.com/lvgl/lvgl
+
+  * SiFli BSP and HAL (vendor/sifli) — supplied with openvela board support
+
+Implementation references (interfaces / documented patterns, not copied source):
+
+  * LVGL on NuttX initialization follows the sequence documented in
+    openvela apps/examples/lvgldemo/lvgldemo.c (Apache License 2.0).
+
+  * HLK-LD2451 UART frame format — Hi-Link public serial protocol V1.03;
+    parser implemented in app/edge_walker/ew_ld2451.c.
+
+  * ESP AT Wi-Fi module — Espressif AT command interface over UART; official
+    AT firmware may be flashed separately; driver in ew_wifi_at.c is original.
+
+  * openvela ai_agent — Skill/Tool registration macros; approach_alert Tool
+    in app/edge_walker/ai_agent_ext/ is team-authored.
+
+Runtime assets (not included in this repository):
+
+  * Optional Source Han Sans or Noto Sans CJK fonts may be deployed to
+    /data/font/ under the SIL Open Font License 1.1. The application does not
+    require an external font to start or render its built-in Chinese UI.
+
+  * Xiaomi MiMo API — contest-provided cloud LLM; credentials via runtime
+    /data/ai_agent/config/config.json only.
+
+Embedded font asset:
+
+  * app/edge_walker/ew_font_cjk_18.c — LVGL bitmap subset generated from
+    Adobe Source Han Sans CN Bold. Source Han Sans is licensed under the SIL
+    Open Font License 1.1. The original font file is not redistributed here.
+    Full license: THIRD_PARTY_LICENSES/SourceHanSans-OFL-1.1.txt
+    https://github.com/adobe-fonts/source-han-sans
+    https://openfontlicense.org/open-font-license-official-text/
+
+Hardware documentation:
+
+  * SiFli SF32LB52-DevKit-LCD design files and wiki — property of SiFli;
+    download from official links listed in docs/sifli_pinout_sources/README.md.
+    This repository does not redistribute SiFli PDF/Gerber/wiki mirrors.
+
+Contest templates retained in this repository:
+
+  * app/hello_app/, quickapp/hello_quickapp/, board/contest_board/ —
+    openvela contest skeleton (Apache License 2.0 ecosystem).

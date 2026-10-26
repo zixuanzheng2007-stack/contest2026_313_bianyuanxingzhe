@@ -1,10 +1,12 @@
 # 边缘行者（Bian Yuan Xing Zhe）
 
+> **Fork 开发约定（2026-10-26）**：个人 fork 的 `dev-ai-contest-2026` 是允许待审开发的 dev 分支。先在 fork 开发、同步和验证，审核通过后才向 `open-vela` 竞赛仓提交 PR。开发快照不代表竞赛交付或真机验收通过。流程及本次冲突处理见 [Git 协作说明](scripts/git/README.md) 和 [同步记录](docs/协作/Fork同步与开发仓约定_2026-10-26.md)。
+
 队伍专属仓：`contest2026_313_bianyuanxingzhe` · 截止 **2026-09-20**
 
 ## 一、作品简介
 
-面向骑行/步行场景的**后方来车接近预警**原型：毫米波雷达感知接近目标，在 **SF32LB52-DevKit-LCD（openvela）** 上完成本地解析与门限决策，并给出可感知告警（蜂鸣 / LCD / LED 等，输出抽象为 `alert_output`）。
+面向骑行/步行场景的**后方来车接近预警**原型：毫米波雷达感知自行车（含共享单车）及静音电动车等接近目标，在 **SF32LB52-DevKit-LCD（openvela）** 上完成本地解析与门限决策，并给出可感知告警（蜂鸣 / LCD / LED 等，输出抽象为 `alert_output`）。
 
 最小闭环：
 
@@ -12,7 +14,7 @@
 LD2451 ──UART──► 板端解析 + 本地门限决策 ──► alert_output（可感知响应）
 ```
 
-初赛 MVP 双线：① LD2451→板端门限→`alert_output`；② openvela **ai_agent** 上板 + ≥1 Skill + ≥1「主动+执行」（接近触发告警 Tool）。测距不靠 LLM。分工见 `docs/分工/`。
+初赛 MVP 双线：① LD2451→板端门限→`alert_output`；② openvela **ai_agent** 上板 + ≥1 Skill + ≥1「主动+执行」（接近触发告警 Tool）。测距不靠 LLM。分工见 [`docs/分工/README.md`](docs/分工/README.md)。
 
 ## 二、选题方向
 
@@ -31,14 +33,14 @@ contest2026_313_bianyuanxingzhe/
 ├── board_overlay/sf32lb52_devkit_lcd/  # rcS.user → ew boot
 ├── board/contest_board/      # 模板板级骨架
 ├── quickapp/hello_quickapp/  # 快应用模板（本作品暂不依赖）
-├── docs/                     # 方案、选型、接线、分工、冒烟记录
-├── scripts/                  # Windows 检测/冒烟/烧录辅助脚本
-├── tools/                    # 本机工具缓存（驱动/雷达APP/sftool；大文件默认不入仓）
+├── docs/                     # 文档（见 docs/README.md）
+├── scripts/                  # guest=Ubuntu 编译 · host=Windows 烧录/冒烟
+├── VMware_share/artifacts/   # HGFS 固件交换（gitignore）
+├── tools/                    # sftool、雷达手册等
 └── logs/                     # AI Coding 日志（必须提交）
-    └── zixuanzheng2007-stack/
 ```
 
-详细文档索引见 [`docs/00_提交材料索引.md`](docs/00_提交材料索引.md)。
+详细文档索引见 [`docs/README.md`](docs/README.md)（提交勾选见 [`docs/00_提交材料索引.md`](docs/00_提交材料索引.md)）。
 
 ## 四、运行方式
 
@@ -64,12 +66,11 @@ repo sync -c -j8
 #   Contest 2026 team 313 edge_walker
 #   LVGL / FreeType（若需 Agent 中文）
 
-./build.sh vendor/sifli/boards/sf32lb52_devkit_lcd --cmake -j8
-# 路径以 vendor 实际目录为准；亦可用已配置的 cmake_out 增量：
-# ninja -C cmake_out/sf32lb52_devkit_lcd
+bash contest2026_313_bianyuanxingzhe/scripts/guest/build_ew_main.sh
+# 或全量：./build.sh vendor/sifli/boards/sf32lb52_devkit_lcd --cmake -j8
 ```
 
-产物：`cmake_out/sf32lb52_devkit_lcd/nuttx.bin`，烧录地址 **`0x12010000`**。
+产物：`cmake_out/.../nuttx.bin` → 拷贝到 `VMware_share/artifacts/nuttx.bin`，烧录地址 **`0x12010000`**。
 
 ### 3. 烧录（Windows 真机站）
 
@@ -77,8 +78,8 @@ repo sync -c -j8
 - 工具：`tools/sftool/sftool.exe` 或思澈 Impeller（Interface=UART）
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\flash_sf32.ps1 `
-  -Port COM7 -Firmware "nuttx.bin@0x12010000"
+powershell -ExecutionPolicy Bypass -File scripts\host\flash_sf32.ps1 `
+  -Port COM7 -Firmware "VMware_share\artifacts\nuttx.bin@0x12010000"
 ```
 
 等价：
@@ -92,7 +93,7 @@ sftool -c SF32LB52 -p COM7 -b 1000000 write_flash nuttx.bin@0x12010000
 - VIN→5V，GND→GND，TX↔RX 交叉接板端业务 UART（勿占用 Debug UART）
 - 手机 **HLKRadarTool** 可先蓝牙验活；量产路径以 UART 协议解析为准
 
-更细的接线见 [`docs/三款毫米波雷达综合选型与接线手册.md`](docs/三款毫米波雷达综合选型与接线手册.md)。
+接线见 [`docs/硬件/DevKit-LCD.md`](docs/硬件/DevKit-LCD.md) · 雷达选型见 [`docs/硬件/三款毫米波雷达综合选型与接线手册.md`](docs/硬件/三款毫米波雷达综合选型与接线手册.md)。
 
 ### 5. 板上演示（评委 / 录像）
 
@@ -120,7 +121,7 @@ ew alert none      → 回 EW READY
 
 **赛题 Agent（已实现）：** `ew boot` 安装 Skill `approach-warn`（`/data/ai_agent/skills/`），雷达越限经 `ew_agent_proactive_alert` → Tool `approach_alert` → `alert_output()`。演示：`ew fake 10 20`，串口见 `[ew_agent]`、`[alert_output]`。详见 [`app/edge_walker/README.md`](app/edge_walker/README.md)。
 
-**提交进度：** 代码在 [`feature/host-edge-walker`](https://github.com/zixuanzheng2007-stack/contest2026_313_bianyuanxingzhe/tree/feature/host-edge-walker) → [PR #4](https://github.com/open-vela/contest2026_313_bianyuanxingzhe/pull/4) 合入 `dev-ai-contest-2026`（CLA ✅）。技术报告见 [`docs/提交材料/边缘行者_技术报告_V1.0.md`](docs/提交材料/边缘行者_技术报告_V1.0.md)。
+**提交进度：** PR #6、#7、#8 已合入 `dev-ai-contest-2026`；PR #9 已创建且当前无冲突、CLA 通过，待合并。技术报告见 [`docs/提交材料/边缘行者_技术报告_V1.0.md`](docs/提交材料/边缘行者_技术报告_V1.0.md)。
 
 ## 六、AI Coding 使用说明
 
@@ -132,12 +133,9 @@ ew alert none      → 回 EW READY
 | `c06c0b41-…` | 专属仓 fork / `dev-ai-contest-2026` 分支确认 |
 | `df773b3a-…` | 主开发会话：方案、文档、雷达、板端检测烧录至提交整理 |
 
-完整对话见 [`logs/zixuanzheng2007-stack/`](logs/zixuanzheng2007-stack/)：
+官方有效日志见 [`logs/zixuanzheng2007-stack/`](logs/zixuanzheng2007-stack/)；Cursor 原始记录移至 [`docs/提交材料/archive/supplemental_cursor_logs/`](docs/提交材料/archive/supplemental_cursor_logs/)，仅用于人工追溯，不计入官方有效工时。
 
-- 转换后的竞赛 schema JSONL：`cursor__<sid>.jsonl`
-- **原始 Cursor transcript**：同日目录下 `raw/<sid>.jsonl`
-
-> **合规说明**：官方自动采集工具支持 Claude Code / OpenCode / Codex / AIoT-IDE。Cursor 不在官方自动采集列表。本仓已将 Cursor 全过程原始日志按手册 schema **手工归档**，便于评委追溯。完成 `repo sync` 后请安装 `contest-log-collector`，后续优先在官方支持工具内开发，使有效工时自动入仓。
+> **合规说明**：官方工具最新版本已支持 Cursor SQLite backfill。2026-09-19 在 Host 与 Guest 实际运行后，本项目旧会话因采用 Agent transcript/旧存储格式而未匹配到 Composer，因此不冒充官方 backfill 结果；`logs/` 保留通过官方校验的记录，历史 Cursor 文件未删除或改写。
 
 ## 七、官方必读（组委会）
 
@@ -150,4 +148,6 @@ ew alert none      → 回 EW READY
 
 提交方式：fork → PR 回专属仓 → 自行合入；首次贡献需签署 [CLA](https://openvela.com/#/community/cla)。
 
-**开源协议：** 本作品遵循 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0)（与 openvela 生态一致）。
+**开源协议：** [LICENSE](LICENSE)（Apache 2.0）· 第三方说明见 [NOTICE](NOTICE)。
+
+**版权与合规（2026-09-14）：** 根目录已添加 LICENSE/NOTICE；`app/edge_walker/` 源码已加 SPDX 头；SiFli 原厂 Wiki/PDF 已从 Git 移除，改外链（见 [`docs/硬件/sifli_pinout_sources/README.md`](docs/硬件/sifli_pinout_sources/README.md)）。

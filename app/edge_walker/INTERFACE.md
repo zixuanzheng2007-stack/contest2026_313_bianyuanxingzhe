@@ -10,7 +10,7 @@ alert_level: NONE | SOFT | STRONG | EMERGENCY
 
 C 枚举：`EW_ALERT_NONE / SOFT / STRONG / EMERGENCY`（`alert_output.h`）
 
-## A 侧安全判决（不扩字段）
+## 事件
 
 ```text
 event: approach_threshold_exceeded
@@ -23,25 +23,21 @@ payload:
   reason       string  # 调试用
 ```
 
-阶段 1：F 直接 `alert_output(level, reason)`。  
-阶段 2：A 的 Tool `haptic_alert` 只执行已判决等级，不得改写判决。
+常驻 `ew_safety` 运行端侧雷达判决并维护蜂鸣安全下限。业务通知入口为
+`ew_agent_emit_decision()` / `ew_agent_emit_decision_event()`，本地 Tool 为
+`approach_alert`；人工和 Agent 告警不得降低当前雷达安全等级。
 
-> 复赛阶段一后，业务入口统一调用 `ew_agent_emit_decision()`；
-> `alert_output(level, reason)` 仍保留为最终出口兼容接口。
+## 事件追踪（2026-10-26 开发契约）
 
-## B 侧事件信封（复赛冻结）
+- 接收完整 `ew_decision_t`，保留非空 `reason`，不由 LLM 重算距离、TTC 或告警等级。
+- `event_id` 是本次运行中的非零数字；本地 `source` 为 `radar/fake/manual/serial/agent`。
+- `source` 属于本地追踪信封；独立 Agent Tool JSON 仅接受 `level/reason/event_id`。
+- 独立 Tool 使用 `EWA1 <numeric-id> <level> <hex-reason>` IPC；发布成功返回 `queued`，消费完成才产生带 ID 的 `applied/rejected` ACK。
+- `queued`、软件 `applied`、实际声音/画面及道路验收分别留证；本地 C 调用不能证明独立 Agent registry 已被调用。
+- fork 旧版字符串 `evt-*` ID、明文 source IPC 和旧函数签名已归档，不能与本协议混用。
 
-```text
-event_id    string   evt-<source-tag>-<time>-<seq>
-source      enum     radar | fake | manual | serial | agent
-```
-
-- `event_id/source` 由 B 生成，不允许 A 的安全判决重新计算这些内容。
-- fake、真实雷达、手工和串口入口必须通过同一分发函数。
-- Tool JSON 可携带 `event_id/source`；省略时回退为 `evt-agt-* / agent`。
-- 跨进程请求文件格式：`<level> <event_id> <source> <reason>`。
-
-完整验收规则见 `docs/复赛/阶段一_接口冻结与验收.md`。
+当前完整说明见 [approach-warn](skills/approach-warn.md)；旧版设计与验收记录见
+[历史归档](../../docs/复赛/archive/stage1-20261019/README.md)。
 
 ## 初值门限
 
