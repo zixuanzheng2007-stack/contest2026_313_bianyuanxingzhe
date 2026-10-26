@@ -10,6 +10,8 @@
 #ifndef EDGE_WALKER_EW_WIFI_AT_H
 #define EDGE_WALKER_EW_WIFI_AT_H
 
+#include "ew_net_status.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -111,6 +113,10 @@ ew_wifi_http_result_t ew_wifi_http_ssl_post(const char *host, unsigned port,
                                             const char *api_key,
                                             const char *json_body,
                                             char *resp, unsigned resp_sz);
+
+/* Last Wi-Fi/HTTP fault; successful operations reset it to OK. */
+ew_net_fault_t ew_wifi_last_fault(void);
+const char *ew_wifi_last_fault_text(void);
 
 #ifdef __cplusplus
 }

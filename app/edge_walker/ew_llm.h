@@ -8,6 +8,8 @@
 #ifndef EDGE_WALKER_EW_LLM_H
 #define EDGE_WALKER_EW_LLM_H
 
+#include "ew_net_status.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -26,6 +28,10 @@ typedef enum {
 
 /* 阻塞调用。reply 写入 out（UTF-8），失败返回可分层的错误码。 */
 ew_llm_result_t ew_llm_ask(const char *prompt, char *out, unsigned out_sz);
+
+/* Stable detail for the latest request; the ew_llm_result_t API is unchanged. */
+ew_net_fault_t ew_llm_last_fault(void);
+const char *ew_llm_last_fault_text(void);
 
 /* 安全配置 MiMo：仅传入 API key，其余端点使用固件内的官方默认值。 */
 int ew_llm_configure_mimo(const char *api_key, char *out, unsigned out_sz);

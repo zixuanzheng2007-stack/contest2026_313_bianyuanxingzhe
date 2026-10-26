@@ -15,6 +15,7 @@
 | `ew_wifi_at.*` | ESP AT 猫：扫描 / 连接 / 凭证 / HTTPS | 郑子轩 |
 | `ew_wifi_ui.*` | WiFi 配网页 | 郑子轩 |
 | `ew_llm.*` | 走 AT HTTPS 问大模型 | 韦政宇 |
+| `ew_net_status.*` | 联网 / LLM 稳定故障码、HTTP 与 AT 分类、日志脱敏 | 角色 B |
 | `ew_agent.*` | Skill `approach-warn` + Tool `approach_alert` | 韦政宇 |
 | `skills/` | Skill 文档模板 | 韦政宇 |
 | `ai_agent_ext/` | ai_agent 进程侧 Tool 注入 | 韦政宇 |
@@ -54,9 +55,26 @@ ew wifi scan                列出周边网络（含定向补扫 hint）
 ew wifi probe <ssid>        只扫一个 SSID（华为热点漏扫时用）
 ew wifi join <ssid> [pass]  连接并记住（SSID 含空格用引号）
 ew wifi forget              断开并清除凭证
+ew wifi fault               显示最近一次联网故障码
 ew wifi ping                AT 握手
 ew at AT+CIFSR              原始 AT
 ```
+
+## 阶段二：联网故障与对话隔离
+
+Wi-Fi、TLS、HTTP、配置和模型回复错误会归一到稳定短码，例如
+`no_modem`、`bad_password`、`lan_only`、`http_auth`、`http_rate_limit`。
+配网页和对话页显示可执行提示，串口可用 `ew wifi fault` 查询最近故障。
+
+网络问答在后台线程执行。每次提问带页面代数；离开或重进对话页后，旧请求
+即使晚到也不会写入新页面。网络失败只影响问答，本地雷达测距、判决、蜂鸣和
+屏色告警保持原路径。
+
+本阶段不修改 A 侧距离、TTC、门限和告警等级，也不覆盖已有的
+`ew_safety`、`ew_snapshot`、`ew_esp_stream` 和单槽告警 ACK 架构。
+
+详细交付说明和实板验收表见
+[`docs/复赛/阶段二_联网故障与对话隔离.md`](../../docs/复赛/阶段二_联网故障与对话隔离.md)。
 
 ## 其他命令
 

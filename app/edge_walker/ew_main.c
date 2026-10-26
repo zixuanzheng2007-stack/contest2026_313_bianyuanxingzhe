@@ -242,6 +242,14 @@ static int cmd_wifi(int argc, char **argv)
     return ew_wifi_at_diag();
   }
 
+  if (strcmp(sub, "fault") == 0) {
+    ew_net_fault_t fault = ew_wifi_last_fault();
+
+    printf("[ew-net] fault=%s text=%s\n", ew_net_fault_code(fault),
+           ew_net_fault_text(fault));
+    return fault == EW_NET_FAULT_OK ? 0 : 1;
+  }
+
   if (strcmp(sub, "raw") == 0) {
     return ew_wifi_at_status();
   }
@@ -316,6 +324,7 @@ static int cmd_help(void)
   printf("  ew wifi join <ssid> [pass]  connect and remember\n");
   printf("  ew wifi probe <ssid>        directed scan one SSID\n");
   printf("  ew wifi forget              drop saved credentials\n");
+  printf("  ew wifi fault               show last network fault code\n");
   printf("  ew wifi ping                MODEM/WiFi/LAN/ONLINE layered check\n");
   printf("  ew wifi raw                 AT+GMR/CWMODE?/CWJAP?/CIPSTA?\n");
   printf("  ew at <cmd>                 raw AT, e.g. ew at AT+CIFSR\n");

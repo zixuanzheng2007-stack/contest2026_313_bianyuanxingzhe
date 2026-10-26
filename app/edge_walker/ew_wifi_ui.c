@@ -117,10 +117,12 @@ static void *job_thread(void *arg)
     if (n < 0) {
       if (n == EW_WIFI_SCAN_BUSY) {
         snprintf(g_status_text, sizeof(g_status_text), "scan already running");
-      } else {
+      } else if (g_ap_count > 0) {
         snprintf(g_status_text, sizeof(g_status_text),
-                 g_ap_count > 0 ? "modem error - showing last results"
-                                : "modem not responding");
+                 "scan failed - showing last results");
+      } else {
+        snprintf(g_status_text, sizeof(g_status_text), "%s",
+                 ew_wifi_last_fault_text());
       }
       g_job_done = 1;
       return NULL;
@@ -140,15 +142,18 @@ static void *job_thread(void *arg)
           snprintf(g_status_text, sizeof(g_status_text),
                    "found %d network(s)", g_ap_count);
         } else {
-          snprintf(g_status_text, sizeof(g_status_text), "not connected");
+          snprintf(g_status_text, sizeof(g_status_text),
+                   "NO WIFI | scan or enter SSID");
         }
         break;
       default:
         if (g_ap_count > 0) {
           snprintf(g_status_text, sizeof(g_status_text),
-                   "found %d network(s)", g_ap_count);
+                   "found %d | %s", g_ap_count,
+                   ew_wifi_last_fault_text());
         } else {
-          snprintf(g_status_text, sizeof(g_status_text), "modem not responding");
+          snprintf(g_status_text, sizeof(g_status_text), "%s",
+                   ew_wifi_last_fault_text());
         }
         break;
     }
@@ -162,10 +167,12 @@ static void *job_thread(void *arg)
         snprintf(g_status_text, sizeof(g_status_text), "CONNECTED  %s", ip);
         break;
       case EW_WIFI_IDLE:
-        snprintf(g_status_text, sizeof(g_status_text), "not connected");
+        snprintf(g_status_text, sizeof(g_status_text),
+                 "NO WIFI | scan or enter SSID");
         break;
       default:
-        snprintf(g_status_text, sizeof(g_status_text), "modem not responding");
+        snprintf(g_status_text, sizeof(g_status_text), "%s",
+                 ew_wifi_last_fault_text());
         break;
     }
   }
@@ -198,6 +205,7 @@ static void job_start(ew_job_t job, const char *busy_text)
   if (pthread_create(&th, &attr, job_thread, NULL) != 0) {
     printf("[ew-wifi-ui] job thread create failed\n");
     snprintf(g_status_text, sizeof(g_status_text), "busy, retry later");
+    memset(g_job_pass, 0, sizeof(g_job_pass));
     g_job_done = 1;
   } else {
     pthread_detach(th);

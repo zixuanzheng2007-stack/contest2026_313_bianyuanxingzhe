@@ -16,6 +16,7 @@
 #include "ew_wifi_ui.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 #include <ctype.h>
@@ -72,6 +73,8 @@ static volatile int g_busy;
 static char g_pending[256];
 static char g_reply[EW_CHAT_TEXT_MAX];
 static volatile int g_reply_ready;
+static unsigned g_ask_generation;
+static pthread_mutex_t g_reply_mu = PTHREAD_MUTEX_INITIALIZER;
 static bool g_zh;
 static char g_py[32];
 static int g_kbd_fd = -1;
@@ -347,39 +350,37 @@ void ew_ui_sanitize_text(char *s)
   *write = '\0';
 }
 
+/* An async reply is valid only for the page generation where it started. */
+typedef struct {
+  unsigned generation;
+  char prompt[256];
+} ew_ask_job_t;
+
+static void make_llm_reply(ew_llm_result_t result, char *out, unsigned out_sz)
+{
+  if (result != EW_LLM_OK) {
+    snprintf(out, out_sz, "MiMo 暂不可用 [%s]；本地雷达告警不受影响。",
+             ew_net_fault_code(ew_llm_last_fault()));
+  }
+}
+
 static void *ask_thread(void *arg)
 {
-  ew_llm_result_t rc;
+  ew_ask_job_t *job = (ew_ask_job_t *)arg;
+  char reply[EW_CHAT_TEXT_MAX];
+  ew_llm_result_t result;
 
-  (void)arg;
-  g_reply[0] = '\0';
-  rc = ew_llm_ask(g_pending, g_reply, sizeof(g_reply));
-  if (rc != EW_LLM_OK) {
-    switch (rc) {
-      case EW_LLM_ERR_NO_WIFI:
-        snprintf(g_reply, sizeof(g_reply), "Wi-Fi 未连接，请先连接热点。");
-        break;
-      case EW_LLM_ERR_CONFIG:
-        snprintf(g_reply, sizeof(g_reply), "MiMo 尚未配置，请连接电脑控制端补配。");
-        break;
-      case EW_LLM_ERR_AUTH:
-        snprintf(g_reply, sizeof(g_reply), "MiMo 鉴权失败，请检查测试密钥。");
-        break;
-      case EW_LLM_ERR_TLS:
-        snprintf(g_reply, sizeof(g_reply), "MiMo TLS 连接失败，请稍后重试。");
-        break;
-      case EW_LLM_ERR_TIMEOUT:
-        snprintf(g_reply, sizeof(g_reply), "MiMo 请求超时，请稍后重试。");
-        break;
-      case EW_LLM_ERR_AT_BUSY:
-        snprintf(g_reply, sizeof(g_reply), "网络模组忙或无响应，请稍后重试。");
-        break;
-      default:
-        snprintf(g_reply, sizeof(g_reply), "MiMo 返回异常，请稍后重试。");
-        break;
-    }
+  reply[0] = '\0';
+  result = ew_llm_ask(job->prompt, reply, sizeof(reply));
+  make_llm_reply(result, reply, sizeof(reply));
+
+  pthread_mutex_lock(&g_reply_mu);
+  if (job->generation == g_ask_generation) {
+    snprintf(g_reply, sizeof(g_reply), "%s", reply);
+    g_reply_ready = 1;
   }
-  g_reply_ready = 1;
+  pthread_mutex_unlock(&g_reply_mu);
+  free(job);
   return NULL;
 }
 
@@ -388,6 +389,8 @@ static void start_ask(const char *text)
   pthread_t th;
   pthread_attr_t attr;
   const char *p;
+  ew_ask_job_t *job;
+  unsigned generation;
 
   if (text == NULL || g_busy) {
     return;
@@ -405,8 +408,11 @@ static void start_ask(const char *text)
   add_bubble("...", false);
   g_wait_bubble = lv_obj_get_child(g_list,
                                   (int32_t)(lv_obj_get_child_count(g_list) - 1));
+  pthread_mutex_lock(&g_reply_mu);
+  generation = ++g_ask_generation;
   g_busy = 1;
   g_reply_ready = 0;
+  pthread_mutex_unlock(&g_reply_mu);
   if (g_status != NULL) {
     lv_label_set_text(g_status, "thinking... (AT + MiMo)");
   }
@@ -414,16 +420,40 @@ static void start_ask(const char *text)
 
   p = local_reply(g_pending);
   if (p != NULL) {
+    pthread_mutex_lock(&g_reply_mu);
     snprintf(g_reply, sizeof(g_reply), "%s", p);
     g_reply_ready = 1;
+    pthread_mutex_unlock(&g_reply_mu);
     return;
   }
 
+  job = (ew_ask_job_t *)malloc(sizeof(*job));
+  if (job == NULL) {
+    ew_llm_result_t result;
+
+    g_reply[0] = '\0';
+    result = ew_llm_ask(g_pending, g_reply, sizeof(g_reply));
+    make_llm_reply(result, g_reply, sizeof(g_reply));
+    pthread_mutex_lock(&g_reply_mu);
+    g_reply_ready = 1;
+    pthread_mutex_unlock(&g_reply_mu);
+    return;
+  }
+  job->generation = generation;
+  snprintf(job->prompt, sizeof(job->prompt), "%s", g_pending);
+
   pthread_attr_init(&attr);
   pthread_attr_setstacksize(&attr, 65536);
-  if (pthread_create(&th, &attr, ask_thread, NULL) != 0) {
-    snprintf(g_reply, sizeof(g_reply), "系统资源不足，请稍后重试。");
+  if (pthread_create(&th, &attr, ask_thread, job) != 0) {
+    ew_llm_result_t result;
+
+    g_reply[0] = '\0';
+    result = ew_llm_ask(g_pending, g_reply, sizeof(g_reply));
+    make_llm_reply(result, g_reply, sizeof(g_reply));
+    pthread_mutex_lock(&g_reply_mu);
     g_reply_ready = 1;
+    pthread_mutex_unlock(&g_reply_mu);
+    free(job);
   } else {
     pthread_detach(th);
   }
@@ -1033,17 +1063,22 @@ static void build_ui(void)
 
 static void poll_reply(void)
 {
+  char reply[EW_CHAT_TEXT_MAX];
+
   if (!g_reply_ready) {
     return;
   }
+  pthread_mutex_lock(&g_reply_mu);
   g_reply_ready = 0;
   g_busy = 0;
-  ew_ui_sanitize_text(g_reply);
+  snprintf(reply, sizeof(reply), "%s", g_reply);
+  pthread_mutex_unlock(&g_reply_mu);
+  ew_ui_sanitize_text(reply);
   if (g_wait_bubble != NULL) {
     lv_obj_delete(g_wait_bubble);
     g_wait_bubble = NULL;
   }
-  add_bubble(g_reply[0] != '\0' ? g_reply : "(empty)", false);
+  add_bubble(reply[0] != '\0' ? reply : "(empty)", false);
   if (g_status != NULL) {
     lv_label_set_text(g_status,
                       g_font != NULL
@@ -1220,8 +1255,11 @@ static void chat_page_build(void)
   g_more_btn = NULL;
   g_ime_page = 0;
   g_wait_bubble = NULL;
+  pthread_mutex_lock(&g_reply_mu);
+  g_ask_generation++;
   g_busy = 0;
   g_reply_ready = 0;
+  pthread_mutex_unlock(&g_reply_mu);
   g_quick_prompts_visible = false;
   build_ui();
   apply_remote_pending();
@@ -1262,6 +1300,11 @@ static void page_teardown(ew_page_t page)
   switch (page) {
     case EW_PAGE_CHAT:
       hide_kb();
+      pthread_mutex_lock(&g_reply_mu);
+      g_ask_generation++;
+      g_busy = 0;
+      g_reply_ready = 0;
+      pthread_mutex_unlock(&g_reply_mu);
       break;
     case EW_PAGE_WIFI:
       ew_wifi_ui_teardown();
