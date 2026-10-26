@@ -3,12 +3,14 @@ build/
 out/
 cmake_out/
 *.o
+*.obj
 *.a
 *.elf
 *.hex
 *.map
 *.bin
 !logs/**/*.jsonl
+app/edge_walker/*.exe
 
 # Local tool caches (large / redistributable binaries)
 tools/sftool/**/*.exe

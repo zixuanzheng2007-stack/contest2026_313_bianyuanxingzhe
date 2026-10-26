@@ -25,26 +25,28 @@
 
 static int cmd_alert(int argc, char **argv)
 {
-  ew_alert_level_t level = EW_ALERT_SOFT;
-  const char *reason = "manual_test";
+  ew_decision_t d;
+
+  memset(&d, 0, sizeof(d));
+  d.level = EW_ALERT_SOFT;
+  d.reason = "manual_test";
 
   if (argc >= 3) {
     if (strcmp(argv[2], "none") == 0 || strcmp(argv[2], "0") == 0) {
-      level = EW_ALERT_NONE;
+      d.level = EW_ALERT_NONE;
     } else if (strcmp(argv[2], "strong") == 0 || strcmp(argv[2], "2") == 0) {
-      level = EW_ALERT_STRONG;
+      d.level = EW_ALERT_STRONG;
     } else if (strcmp(argv[2], "crit") == 0 || strcmp(argv[2], "3") == 0) {
-      level = EW_ALERT_EMERGENCY;
+      d.level = EW_ALERT_EMERGENCY;
     } else {
-      level = EW_ALERT_SOFT;
+      d.level = EW_ALERT_SOFT;
     }
   }
   if (argc >= 4) {
-    reason = argv[3];
+    d.reason = argv[3];
   }
 
-  alert_output(level, reason);
-  return 0;
+  return ew_agent_emit_decision(&d, EW_EVENT_SOURCE_MANUAL);
 }
 
 static int cmd_buzz(int argc, char **argv)
@@ -80,8 +82,7 @@ static int cmd_fake(int argc, char **argv)
   d = ew_decide(&t);
   printf("[ew] fake range=%.1fm speed=%.1f approaching=%d -> %s\n",
          t.range_m, t.speed_kmh, (int)t.approaching, d.reason);
-  alert_output(d.level, d.reason);
-  return 0;
+  return ew_agent_emit_decision(&d, EW_EVENT_SOURCE_FAKE);
 }
 
 static int cmd_wifi(int argc, char **argv)
@@ -209,7 +210,7 @@ static int cmd_loop(void)
     if (d.level != last) {
       printf("[ew] latch %s range=%.1fm %s link=%d\n",
              ew_alert_level_name(d.level), d.range_m, d.reason, (int)d.link);
-      ew_agent_proactive_alert(d.level, d.range_m, d.reason);
+      ew_agent_emit_decision(&d, EW_EVENT_SOURCE_RADAR);
       last = d.level;
     }
   }

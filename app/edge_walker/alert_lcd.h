@@ -17,6 +17,9 @@ extern "C" {
 /* 刷新预警配色与文字；常驻 UI 未起来时改为落盘排队，等它起来再显示。 */
 void alert_lcd_show(ew_alert_level_t level, const char *reason);
 
+void alert_lcd_show_event(const char *event_id, const char *source,
+                          ew_alert_level_t level, const char *reason);
+
 /* rcS 入口：初始化 LVGL 并进入 UI 主循环，正常情况下不返回。 */
 void alert_lcd_boot_splash(void);
 

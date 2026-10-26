@@ -9,6 +9,8 @@
 #define EDGE_WALKER_EW_AGENT_H
 
 #include "alert_output.h"
+#include "ew_event.h"
+#include "ew_ld2451.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -18,11 +20,23 @@ extern "C" {
 void ew_agent_init(void);
 
 /*
+ * Single B-side entry for every pre-judged alert. Generates the event id,
+ * records the source, and forwards the unchanged decision to the Tool chain.
+ */
+int ew_agent_emit_decision(const ew_decision_t *decision,
+                           ew_event_source_t source);
+
+/*
  * 主动触发 approach_alert Tool（LLM 不参与判距）。
  * range_m 写入 reason 副文案；返回 0 表示 Tool 执行成功。
  */
 int ew_agent_proactive_alert(ew_alert_level_t level, float range_m,
                              const char *reason);
+
+int ew_agent_proactive_alert_ex(const char *event_id,
+                                ew_event_source_t source,
+                                ew_alert_level_t level, float range_m,
+                                const char *reason);
 
 #ifdef __cplusplus
 }

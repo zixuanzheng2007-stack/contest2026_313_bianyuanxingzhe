@@ -21,6 +21,10 @@ typedef enum {
 /* 档位：NONE 静音 … EMERGENCY 紧急。reason 可为 NULL。 */
 void alert_output(ew_alert_level_t level, const char *reason);
 
+/* Same output path, with event trace metadata for the B-side chain. */
+void alert_output_event(const char *event_id, const char *source,
+                        ew_alert_level_t level, const char *reason);
+
 #ifdef __cplusplus
 }
 #endif

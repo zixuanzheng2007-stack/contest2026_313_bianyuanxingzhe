@@ -6,6 +6,7 @@
 #define EDGE_WALKER_EW_AGENT_TOOL_H
 
 #include "alert_output.h"
+#include "ew_event.h"
 
 #include <stddef.h>
 
@@ -15,6 +16,12 @@ extern "C" {
 
 int tool_approach_alert_execute(const char *input_json, char *output,
                                 size_t output_size);
+
+int ew_agent_tool_approach_alert_ex(const char *event_id,
+                                    ew_event_source_t source,
+                                    ew_alert_level_t level,
+                                    const char *reason, char *output,
+                                    size_t output_size);
 
 int ew_agent_tool_approach_alert(ew_alert_level_t level, const char *reason,
                                  char *output, size_t output_size);

@@ -8,6 +8,7 @@
 |------|------|--------|
 | `ew_main.c` | 命令行入口，只做参数分派 | 郑子轩 |
 | `alert_output.*` | 提醒出口：日志 + 蜂鸣 + 屏色，一处调用三处生效 | 郑子轩 |
+| `ew_event.*` | B 侧事件信封：生成 `event_id`、映射 `source` | 韦政宇 |
 | `alert_buzzer.*` | PA28 无源蜂鸣，后台 worker 持续发波 | 郑子轩 |
 | `alert_lcd.*` | 预警页与 LVGL 启动 | 郑子轩 |
 | `ew_ld2451.*` | LD2451 帧解码 + `ew_decide` 门限 | 王筠昊 |
@@ -19,6 +20,7 @@
 | `skills/` | Skill 文档模板 | 韦政宇 |
 | `ai_agent_ext/` | ai_agent 进程侧 Tool 注入 | 韦政宇 |
 | `host_smoke.c` | 主机侧解码与策略回归，不上板 | 王筠昊 |
+| `event_chain_smoke.c` | 主机侧 fake/radar → Tool → 输出链路回归，不上板 | 韦政宇 |
 
 ## 三个页面
 
@@ -95,6 +97,11 @@ ew alert strong test     # 手动 Tool 链
 ```bash
 # 主机侧回归，不需要板子
 gcc -O2 -Wall -Wextra -o /tmp/host_smoke host_smoke.c ew_ld2451.c && /tmp/host_smoke
+
+# 事件接口与 Tool JSON 回归
+gcc -O2 -Wall -Wextra -o /tmp/event_chain_smoke \
+  event_chain_smoke.c ew_event.c ew_ld2451.c ew_agent.c ew_agent_tool.c
+/tmp/event_chain_smoke
 
 # 增量编译
 ninja -C ~/openvela/cmake_out/sf32lb52_devkit_lcd
