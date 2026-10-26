@@ -1,0 +1,34 @@
+边缘行者阶段二主机自测
+日期：2026-10-26
+基线：dev-ai-contest-2026 @ 2d3fb8f
+
+1. stage2_smoke
+结果：STAGE2 PASS
+编译器：MSVC 14.44.35207，/W4 /WX，C 模式
+覆盖：
+- HTTP 200/401/403/404/429/500 分类
+- +CWJAP:1/2/3/4 分类
+- 空 CWJAP 响应分类
+- 稳定故障码和短提示
+- API Key 样式敏感字段脱敏
+
+2. 修改文件语法编译
+结果：PASS
+文件：
+- ew_net_status.c
+- ew_wifi_at.c
+- ew_llm.c
+- ew_chat.c
+- ew_wifi_ui.c
+- ew_main.c
+
+使用 /D_CRT_SECURE_NO_WARNINGS 和 /wd4267 处理仓库现有的 MSVC
+兼容性告警；这些选项只用于 Windows 主机检查，不代表 NuttX 编译参数。
+
+未完成或无法在当前环境运行：
+- host_smoke：当前 MSVC 不支持 ew_ld2451.c 使用的 GCC __atomic_*，需 Linux/GCC
+- OpenVela 编译：虚拟机 192.168.126.128:22 不通
+- 开发板烧录：COM 口未检测到
+- 真实 ESP AT、Wi-Fi、LLM、30 次切页和 2 小时稳定性：PENDING
+
+结论：阶段二新增纯逻辑和 Windows 主机语法检查通过，不代表实板验收通过。
