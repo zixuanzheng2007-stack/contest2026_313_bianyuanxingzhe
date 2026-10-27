@@ -34,4 +34,17 @@ int ew_safety_start(void);
 void ew_safety_snapshot(ew_safety_snapshot_t *out);
 bool ew_safety_take_event(ew_safety_event_t *out);
 
+/* Opt-in bounded UART evidence, copied by the sole reader; no console I/O
+ * on the safety worker. Empty records preserve Hold/link timeout timing.
+ * A sequence gap or dropped>0 invalidates a lossless replay claim. */
+typedef struct {
+  uint32_t seq;
+  uint32_t timestamp_ms;
+  unsigned size;
+  uint8_t bytes[64];
+} ew_road_record_t;
+void ew_safety_road_enable(bool enabled);
+bool ew_safety_road_take(ew_road_record_t *out);
+void ew_safety_road_status(bool *enabled, uint32_t *dropped, unsigned *pending);
+
 #endif

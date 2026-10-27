@@ -15,6 +15,7 @@
 #include "ew_wifi_at.h"
 #include "ew_snapshot.h"
 #include "ew_radar_diag.h"
+#include "ew_safety.h"
 
 #include <ctype.h>
 #include <fcntl.h>
@@ -367,6 +368,51 @@ static void ctl_spawn_worker(const char *line)
   pthread_attr_destroy(&attr);
 }
 
+static void ctl_road(const char *arguments)
+{
+  char id[64], action[16];
+  unsigned i, pending;
+  uint32_t dropped;
+  bool enabled;
+  const char *p = arguments;
+  ew_road_record_t record;
+  parse_token(&p, id, sizeof(id));
+  parse_token(&p, action, sizeof(action));
+  skip_spaces(&p);
+  if (*p || !id[0] || strlen(id) > 48u) goto invalid;
+  for (i = 0; id[i]; i++) {
+    unsigned char c = (unsigned char)id[i];
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+          (c >= '0' && c <= '9') || c == '_' || c == '-')) goto invalid;
+  }
+  if (!strcmp(action, "on")) ew_safety_road_enable(true);
+  else if (!strcmp(action, "off")) ew_safety_road_enable(false);
+  else if (strcmp(action, "poll")) goto invalid;
+  if (!strcmp(action, "poll")) {
+    /* Bounded drain; all formatting/serial writes are outside safety locks. */
+    for (i = 0; i < 32u && ew_safety_road_take(&record); i++) {
+      static const char hex[] = "0123456789abcdef";
+      char raw[129];
+      unsigned j;
+      for (j = 0; j < record.size; j++) {
+        raw[2u*j] = hex[record.bytes[j] >> 4];
+        raw[2u*j+1u] = hex[record.bytes[j] & 15u];
+      }
+      raw[2u*record.size] = '\0';
+      printf("[ew-road] {\"id\":\"%s\",\"seq\":%lu,\"timestamp_ms\":%lu,\"raw_hex\":\"%s\"}\n",
+             id, (unsigned long)record.seq, (unsigned long)record.timestamp_ms, raw);
+    }
+  }
+  ew_safety_road_status(&enabled, &dropped, &pending);
+  printf("[ew-road] {\"id\":\"%s\",\"end\":true,\"enabled\":%s,\"dropped\":%lu,\"pending\":%u,\"firmware\":\"ew-roadtest-20261028-rc1\"}\n",
+         id, enabled ? "true" : "false", (unsigned long)dropped, pending);
+  fflush(stdout);
+  return;
+invalid:
+  printf("[ew-road] {\"id\":null,\"error\":\"invalid_request\"}\n");
+  fflush(stdout);
+}
+
 static void ctl_radar_diag(const char *request_id)
 {
   ew_safety_snapshot_t snapshot;
@@ -457,6 +503,11 @@ static void ctl_dispatch(const char *line)
     return;
   }
 
+  if (strcmp(verb, "road") == 0) {
+    ctl_road(p);
+    return;
+  }
+
   if (strcmp(verb, "radar-diag") == 0) {
     /* The full remaining argument is validated; extra parameters, trailing
      * spaces and long IDs cannot silently turn into a different request. */
@@ -480,6 +531,7 @@ static void ctl_dispatch(const char *line)
     printf("[ew-ctl] @ping  @status  @tap x y  @touch down|move|up x y\n");
     printf("[ew-ctl] @snapshot <request_id> (read-only safety snapshot)\n");
     printf("[ew-ctl] @radar-diag <request_id> (read-only radar counters/sample)\n");
+    printf("[ew-ctl] @road <request_id> on|poll|off (bounded raw evidence)\n");
     printf("[ew-ctl] @mirror fast|on|normal|hd|off|snap\n");
     printf("[ew-ctl] @mimo-set <key>  @mimo-rollback\n");
     printf("[ew-ctl] @input/@submit <UTF-8 text>  @key backspace|tab|escape\n");

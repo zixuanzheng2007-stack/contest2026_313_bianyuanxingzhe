@@ -25,6 +25,67 @@ static ew_safety_event_t g_events[EW_SAFETY_EVENTS];
 static unsigned g_event_head, g_event_count;
 static bool g_started;
 
+#define EW_ROAD_RECORDS 128u
+static ew_road_record_t g_road[EW_ROAD_RECORDS];
+static unsigned g_road_head, g_road_count;
+static uint32_t g_road_seq, g_road_dropped;
+static bool g_road_enabled;
+
+void ew_safety_road_enable(bool enabled)
+{
+  pthread_mutex_lock(&g_lock);
+  /* Repeated on is idempotent: only a new session resets evidence counters. */
+  if (enabled && !g_road_enabled) {
+    g_road_head = g_road_count = 0;
+    g_road_seq = g_road_dropped = 0;
+  }
+  g_road_enabled = enabled;
+  pthread_mutex_unlock(&g_lock);
+}
+
+static void road_capture(const uint8_t *bytes, unsigned size, uint32_t now)
+{
+  unsigned slot;
+  pthread_mutex_lock(&g_lock);
+  if (g_road_enabled) {
+    if (g_road_count == EW_ROAD_RECORDS) {
+      g_road_head = (g_road_head + 1u) % EW_ROAD_RECORDS;
+      g_road_count--;
+      g_road_dropped++;
+    }
+    slot = (g_road_head + g_road_count++) % EW_ROAD_RECORDS;
+    g_road[slot].seq = ++g_road_seq;
+    g_road[slot].timestamp_ms = now;
+    g_road[slot].size = size;
+    if (size) memcpy(g_road[slot].bytes, bytes, size);
+  }
+  pthread_mutex_unlock(&g_lock);
+}
+
+bool ew_safety_road_take(ew_road_record_t *out)
+{
+  bool have = false;
+  if (out == NULL) return false;
+  pthread_mutex_lock(&g_lock);
+  if (g_road_count) {
+    *out = g_road[g_road_head];
+    g_road_head = (g_road_head + 1u) % EW_ROAD_RECORDS;
+    g_road_count--;
+    have = true;
+  }
+  pthread_mutex_unlock(&g_lock);
+  return have;
+}
+
+void ew_safety_road_status(bool *enabled, uint32_t *dropped, unsigned *pending)
+{
+  pthread_mutex_lock(&g_lock);
+  if (enabled) *enabled = g_road_enabled;
+  if (dropped) *dropped = g_road_dropped;
+  if (pending) *pending = g_road_count;
+  pthread_mutex_unlock(&g_lock);
+}
+
 typedef struct {
   uint8_t sample[64];
   unsigned sample_bytes;
@@ -143,6 +204,7 @@ static void *safety_worker(void *unused)
       had_bytes = true;
       radar_error = 0;
       capture_bytes(&capture, bytes, (unsigned)n);
+      road_capture(bytes, (unsigned)n, now);
       for (byte = 0; byte < (unsigned)n; byte++) {
         ew_track_t candidate;
         uint32_t frames_before = sniff.frames_ok;
@@ -156,6 +218,7 @@ static void *safety_worker(void *unused)
         }
       }
     }
+    if (!had_bytes) road_capture(NULL, 0, now);
     d = ew_hold_update(&hold, now, had_bytes, false, NULL);
     /* This setter only updates the already-started buzzer worker's floor.
      * No logging, LVGL, files, AT calls or Agent dispatch on the safety path. */
@@ -230,6 +293,14 @@ bool ew_safety_take_event(ew_safety_event_t *out)
   return have;
 }
 #else
+void ew_safety_road_enable(bool enabled) { (void)enabled; }
+bool ew_safety_road_take(ew_road_record_t *out) { (void)out; return false; }
+void ew_safety_road_status(bool *enabled, uint32_t *dropped, unsigned *pending)
+{
+  if (enabled) *enabled = false;
+  if (dropped) *dropped = 0;
+  if (pending) *pending = 0;
+}
 int ew_safety_start(void) { return -ENOSYS; }
 void ew_safety_snapshot(ew_safety_snapshot_t *out)
 {

@@ -88,11 +88,29 @@ static const char *link_name(ew_link_t link)
 {
   return link==EW_LINK_OK ? "OK" : link==EW_LINK_NOISE ? "NOISE" : "DEAD";
 }
+static void output_poll(unsigned row, uint32_t now, size_t input_bytes,
+                        uint32_t frames_before, const ew_sniff_stats_t *stats,
+                        ew_hold_t *hold, bool had_frame,
+                        ew_alert_level_t last_level)
+{
+  ew_decision_t decision;
+  decision=ew_hold_update(hold,now,input_bytes>0,false,NULL);
+  printf("%u,%lu,%zu,%lu,%lu,%lu,%s,%s,%.3f,%.3f,%.6f,",row,
+         (unsigned long)now,input_bytes,
+         (unsigned long)(stats->frames_ok-frames_before),
+         (unsigned long)stats->frames_ok,(unsigned long)stats->frames_bad,
+         ew_alert_level_name(decision.level),link_name(decision.link),
+         decision.range_m,decision.speed_kmh,decision.ttc_s);
+  quoted(decision.reason);
+  printf(",%s,%s,%u\n",had_frame ? ew_alert_level_name(last_level) : "NO_FRAME",
+         ew_alert_level_name(hold->pending),(unsigned)hold->pending_hits);
+}
 static void usage(void)
 {
   fprintf(stderr,"Usage: host_replay [input.csv|-]\n"
     "CSV header: timestamp_ms,raw_hex\n"
     "timestamp_ms: uint32 decimal milliseconds; modulo-forward time only.\n"
+    "Consecutive equal timestamps form one safety poll; chunks keep input order.\n"
     "raw_hex: hex byte pairs, contiguous or space separated; empty = time tick.\n"
     "Blank lines and # comments are allowed. Maximum row is 65534 bytes.\n");
 }
@@ -102,8 +120,10 @@ int main(int argc,char **argv)
   ew_hold_t hold;
   ew_sniff_stats_t stats={0};
   unsigned line_number=0,rows=0;
-  uint32_t previous=0;
-  bool have_previous=false,header=false;
+  uint32_t previous=0,group_now=0,group_frames_before=0;
+  size_t group_bytes=0;
+  ew_alert_level_t group_last_level=EW_ALERT_NONE;
+  bool have_previous=false,header=false,have_group=false,group_had_frame=false;
   if (argc>2 || (argc==2 && !strcmp(argv[1],"--help"))) {
     usage(); return argc>2 ? 2 : 0;
   }
@@ -117,9 +137,7 @@ int main(int argc,char **argv)
   while (fgets(line,sizeof(line),input)) {
     char stamp[64],*p,*end,*number;
     unsigned long long time_value;
-    uint32_t now,frames_before;
-    ew_decision_t decision;
-    ew_alert_level_t last_level=EW_ALERT_NONE;
+    uint32_t now;
     int count,i;
     line_number++;
     if (!strchr(line,'\n') && !feof(input)) return error(line_number,"row too long");
@@ -146,30 +164,37 @@ int main(int argc,char **argv)
       return error(line_number,"timestamps must advance modulo uint32 (gap <= 2147483647ms)");
     count=hex_bytes(raw);
     if (count<0) return error(line_number,"raw_hex contains non-hex text or an unmatched nibble");
-    previous=now; have_previous=true; frames_before=stats.frames_ok;
+    if (have_group && now!=group_now) {
+      output_poll(++rows,group_now,group_bytes,group_frames_before,&stats,&hold,
+                  group_had_frame,group_last_level);
+      have_group=false;
+    }
+    if (!have_group) {
+      group_now=now;
+      group_frames_before=stats.frames_ok;
+      group_bytes=0;
+      group_had_frame=false;
+      group_last_level=EW_ALERT_NONE;
+      have_group=true;
+    }
+    previous=now; have_previous=true;
+    group_bytes+=(size_t)count;
     for (i=0;i<count;i++) {
       ew_track_t candidate;
       uint32_t before=stats.frames_ok;
       bool got=ew_ld2451_feed_sniff(bytes+i,1,&stats,&candidate);
       if (stats.frames_ok!=before) {
-        last_level=ew_decide(got ? &candidate : NULL).level;
+        group_had_frame=true;
+        group_last_level=ew_decide(got ? &candidate : NULL).level;
         ew_hold_update(&hold,now,true,true,got ? &candidate : NULL);
       }
     }
-    /* Polling here cannot confirm a reused frame or refresh its alert age. */
-    decision=ew_hold_update(&hold,now,count>0,false,NULL);
-    rows++;
-    printf("%u,%lu,%d,%lu,%lu,%lu,%s,%s,%.3f,%.3f,%.6f,",rows,
-           (unsigned long)now,count,(unsigned long)(stats.frames_ok-frames_before),
-           (unsigned long)stats.frames_ok,(unsigned long)stats.frames_bad,
-           ew_alert_level_name(decision.level),link_name(decision.link),
-           decision.range_m,decision.speed_kmh,decision.ttc_s);
-    quoted(decision.reason);
-    printf(",%s,%s,%u\n",stats.frames_ok!=frames_before ?
-      ew_alert_level_name(last_level) : "NO_FRAME",ew_alert_level_name(hold.pending),
-      (unsigned)hold.pending_hits);
   }
   if (ferror(input)) { perror("host_replay: read input"); return 2; }
+  if (have_group) {
+    output_poll(++rows,group_now,group_bytes,group_frames_before,&stats,&hold,
+                group_had_frame,group_last_level);
+  }
   if (input!=stdin) fclose(input);
   if (!header || !rows) return error(line_number,"input needs a header and at least one data row");
   if (fflush(stdout) || ferror(stdout)) { perror("host_replay: write output"); return 2; }
