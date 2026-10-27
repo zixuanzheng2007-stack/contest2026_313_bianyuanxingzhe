@@ -9,7 +9,7 @@
 
 static pthread_mutex_t g_state_mu = PTHREAD_MUTEX_INITIALIZER;
 static ew_net_snapshot_t g_state = {
-  EW_NET_LINK_DOWN, EW_NET_ERR_NONE, "", 0
+  EW_NET_LINK_DOWN, EW_NET_ERR_NONE, "", 0, EW_NET_FAULT_OK
 };
 
 void ew_net_state_publish(ew_net_link_t link, const char *ip)
@@ -39,4 +39,19 @@ int ew_net_state_snapshot(ew_net_snapshot_t *out)
   *out = g_state;
   pthread_mutex_unlock(&g_state_mu);
   return 0;
+}
+
+void ew_net_state_fault(ew_net_fault_t fault)
+{
+  pthread_mutex_lock(&g_state_mu);
+  g_state.fault = fault;
+  g_state.generation++;
+  pthread_mutex_unlock(&g_state_mu);
+}
+
+ew_net_fault_t ew_net_state_last_fault(void)
+{
+  ew_net_snapshot_t snapshot;
+  ew_net_state_snapshot(&snapshot);
+  return snapshot.fault;
 }

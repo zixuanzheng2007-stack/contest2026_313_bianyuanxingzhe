@@ -17,7 +17,23 @@
 #include <stdlib.h>
 #include <string.h>
 
-static volatile ew_net_fault_t g_last_fault = EW_NET_FAULT_OK;
+/* Diagnostic state is shared through ew_net_state; _ex results are per call. */
+static ew_wifi_state_t wifi_probe_result(ew_wifi_state_t result,
+                                        ew_net_fault_t fault, ew_net_fault_t *detail)
+{
+  if (detail != NULL) *detail = fault;
+  ew_net_state_fault(fault);
+  return result;
+}
+
+static ew_wifi_http_result_t wifi_http_result(ew_wifi_http_result_t result,
+                                             ew_net_fault_t fault,
+                                             ew_net_fault_t *detail)
+{
+  if (detail != NULL) *detail = fault;
+  ew_net_state_fault(fault);
+  return result;
+}
 
 #ifdef __NuttX__
 
@@ -701,8 +717,8 @@ static int query_sta_ip(int fd, char *ip, unsigned ip_sz)
 /* AT+CWJAP 失败码 → 屏上短语 */
 static const char *jap_fail_text(const char *resp)
 {
-  g_last_fault = ew_net_fault_from_join_response(resp);
-  return ew_net_fault_text(g_last_fault);
+  ew_net_state_fault(ew_net_fault_from_join_response(resp));
+  return ew_net_fault_text(ew_net_state_last_fault());
 }
 
 /****************************************************************************
@@ -939,8 +955,9 @@ static int inet_probe(int fd)
   return -1;
 }
 
-ew_wifi_state_t ew_wifi_probe(int check_inet, char *ip, unsigned ip_sz)
+ew_wifi_state_t ew_wifi_probe_ex(int check_inet, char *ip, unsigned ip_sz, ew_net_fault_t *detail)
 {
+  ew_net_fault_t fault = EW_NET_FAULT_OK;
   char resp[384];
   char addr[24];
   ew_wifi_state_t st;
@@ -949,11 +966,11 @@ ew_wifi_state_t ew_wifi_probe(int check_inet, char *ip, unsigned ip_sz)
   if (ip != NULL && ip_sz > 0) {
     ip[0] = '\0';
   }
-  g_last_fault = EW_NET_FAULT_OK;
+  fault = EW_NET_FAULT_OK;
 
   fd = at_begin();
   if (fd < 0) {
-    g_last_fault = errno == EBUSY ? EW_NET_FAULT_BUSY : EW_NET_FAULT_NO_MODEM;
+    fault = errno == EBUSY ? EW_NET_FAULT_BUSY : EW_NET_FAULT_NO_MODEM;
     if (errno == EBUSY) {
       /* Contention is not evidence of a disconnected modem. */
       ew_net_state_error(EW_NET_ERR_AT_BUSY);
@@ -961,13 +978,13 @@ ew_wifi_state_t ew_wifi_probe(int check_inet, char *ip, unsigned ip_sz)
       ew_net_state_publish(EW_NET_LINK_DOWN, NULL);
       ew_net_state_error(EW_NET_ERR_RESPONSE);
     }
-    return EW_WIFI_DOWN;
+    return wifi_probe_result(EW_WIFI_DOWN, fault, detail);
   }
   if (at_wake_light(fd) != 0) {
-    g_last_fault = EW_NET_FAULT_NO_MODEM;
+    fault = EW_NET_FAULT_NO_MODEM;
     at_end(fd);
     ew_net_state_publish(EW_NET_LINK_DOWN, NULL);
-    return EW_WIFI_DOWN;
+    return wifi_probe_result(EW_WIFI_DOWN, fault, detail);
   }
 
   /* Association and DHCP must agree. A stale non-zero CIPSTA address alone
@@ -978,13 +995,13 @@ ew_wifi_state_t ew_wifi_probe(int check_inet, char *ip, unsigned ip_sz)
       resp_fail(resp)) {
     at_end(fd);
     ew_net_state_publish(EW_NET_LINK_IDLE, NULL);
-    return EW_WIFI_IDLE;
+    return wifi_probe_result(EW_WIFI_IDLE, EW_NET_FAULT_NO_CREDENTIALS, detail);
   }
 
   if (query_sta_ip(fd, addr, sizeof(addr)) != 0) {
     at_end(fd);
     ew_net_state_publish(EW_NET_LINK_IDLE, NULL);
-    return EW_WIFI_IDLE;
+    return wifi_probe_result(EW_WIFI_IDLE, EW_NET_FAULT_NO_CREDENTIALS, detail);
   }
 
   st = EW_WIFI_JOINED;
@@ -992,7 +1009,7 @@ ew_wifi_state_t ew_wifi_probe(int check_inet, char *ip, unsigned ip_sz)
     if (inet_probe(fd) == 0) {
       st = EW_WIFI_ONLINE;
     } else {
-      g_last_fault = EW_NET_FAULT_LAN_ONLY;
+      fault = EW_NET_FAULT_LAN_ONLY;
     }
   }
   at_end(fd);
@@ -1003,8 +1020,11 @@ ew_wifi_state_t ew_wifi_probe(int check_inet, char *ip, unsigned ip_sz)
   ew_net_state_publish(st == EW_WIFI_ONLINE ? EW_NET_LINK_ONLINE
                                             : EW_NET_LINK_JOINED,
                        addr);
-  return st;
+  return wifi_probe_result(st, fault, detail);
 }
+ew_wifi_state_t ew_wifi_probe(int check_inet, char *ip, unsigned ip_sz)
+{ return ew_wifi_probe_ex(check_inet, ip, ip_sz, NULL); }
+
 
 static int scan_insert_ap(ew_wifi_ap_t *aps, int max, int *count,
                           const ew_wifi_ap_t *ap)
@@ -1380,7 +1400,7 @@ int ew_wifi_scan(ew_wifi_ap_t *aps, int max)
   if (aps == NULL || max <= 0) {
     return EW_WIFI_SCAN_ERROR;
   }
-  g_last_fault = EW_NET_FAULT_OK;
+  ew_net_state_fault(EW_NET_FAULT_OK);
 
   cached = scan_cache_copy(aps, max, 0);
   if (cached >= 0) {
@@ -1395,7 +1415,7 @@ int ew_wifi_scan(ew_wifi_ap_t *aps, int max)
       return cached;
     }
     printf("[ew-at] scan busy\n");
-    g_last_fault = EW_NET_FAULT_BUSY;
+    ew_net_state_fault(EW_NET_FAULT_BUSY);
     return EW_WIFI_SCAN_BUSY;
   }
 
@@ -1403,16 +1423,16 @@ int ew_wifi_scan(ew_wifi_ap_t *aps, int max)
   if (fd < 0) {
     if (errno == EBUSY) {
       result = EW_WIFI_SCAN_BUSY;
-      g_last_fault = EW_NET_FAULT_BUSY;
+      ew_net_state_fault(EW_NET_FAULT_BUSY);
     } else {
-      g_last_fault = EW_NET_FAULT_NO_MODEM;
+      ew_net_state_fault(EW_NET_FAULT_NO_MODEM);
     }
     goto done;
   }
   if (at_wake_light(fd) != 0) {
     /* 轻量握手失败再试完整 wake（含 RST） */
     if (at_wake(fd) != 0) {
-      g_last_fault = EW_NET_FAULT_NO_MODEM;
+      ew_net_state_fault(EW_NET_FAULT_NO_MODEM);
       goto done;
     }
   }
@@ -1432,7 +1452,7 @@ int ew_wifi_scan(ew_wifi_ap_t *aps, int max)
 
   scan_rc = scan_run_once(fd, aps, max, &count);
   if (scan_rc < 0) {
-    g_last_fault = EW_NET_FAULT_RESPONSE;
+    ew_net_state_fault(EW_NET_FAULT_RESPONSE);
     at_drain_rx(fd, 400);
     goto done;
   }
@@ -1447,7 +1467,7 @@ int ew_wifi_scan(ew_wifi_ap_t *aps, int max)
   printf("[ew-at] scan found %d ap\n", count);
   fflush(stdout);
   result = count;
-  g_last_fault = EW_NET_FAULT_OK;
+  ew_net_state_fault(EW_NET_FAULT_OK);
 
 done:
   if (fd >= 0) {
@@ -1471,25 +1491,25 @@ int ew_wifi_join(const char *ssid, const char *pass, char *out, unsigned out_sz)
   if (out != NULL && out_sz > 0) {
     out[0] = '\0';
   }
-  g_last_fault = EW_NET_FAULT_OK;
+  ew_net_state_fault(EW_NET_FAULT_OK);
   if (ssid == NULL || ssid[0] == '\0') {
-    g_last_fault = EW_NET_FAULT_NO_CREDENTIALS;
+    ew_net_state_fault(EW_NET_FAULT_NO_CREDENTIALS);
     return -1;
   }
 
   fd = at_begin();
   if (fd < 0) {
-    g_last_fault = errno == EBUSY ? EW_NET_FAULT_BUSY : EW_NET_FAULT_NO_MODEM;
+    ew_net_state_fault(errno == EBUSY ? EW_NET_FAULT_BUSY : EW_NET_FAULT_NO_MODEM);
     if (out != NULL && out_sz > 0) {
-      snprintf(out, out_sz, "%s", ew_net_fault_text(g_last_fault));
+      snprintf(out, out_sz, "%s", ew_net_fault_text(ew_net_state_last_fault()));
     }
     return 1;
   }
   if (at_wake(fd) != 0) {
-    g_last_fault = EW_NET_FAULT_NO_MODEM;
+    ew_net_state_fault(EW_NET_FAULT_NO_MODEM);
     at_end(fd);
     if (out != NULL && out_sz > 0) {
-      snprintf(out, out_sz, "%s", ew_net_fault_text(g_last_fault));
+      snprintf(out, out_sz, "%s", ew_net_fault_text(ew_net_state_last_fault()));
     }
     return 2;
   }
@@ -1536,7 +1556,7 @@ int ew_wifi_join(const char *ssid, const char *pass, char *out, unsigned out_sz)
   }
   online = (inet_probe(fd) == 0);
   if (!online) {
-    g_last_fault = EW_NET_FAULT_LAN_ONLY;
+    ew_net_state_fault(EW_NET_FAULT_LAN_ONLY);
   }
   at_end(fd);
 
@@ -1547,7 +1567,7 @@ int ew_wifi_join(const char *ssid, const char *pass, char *out, unsigned out_sz)
   printf("[ew-at] join %s ok ip=%s inet=%d\n", ssid, addr, online);
   ew_net_state_publish(online ? EW_NET_LINK_ONLINE : EW_NET_LINK_JOINED, addr);
   if (online) {
-    g_last_fault = EW_NET_FAULT_OK;
+    ew_net_state_fault(EW_NET_FAULT_OK);
   }
   fflush(stdout);
   return 0;
@@ -1560,15 +1580,15 @@ int ew_wifi_forget(void)
   int fd;
   int n;
 
-  g_last_fault = EW_NET_FAULT_OK;
+  ew_net_state_fault(EW_NET_FAULT_OK);
   fd = at_begin();
   if (fd < 0) {
-    g_last_fault = errno == EBUSY ? EW_NET_FAULT_BUSY : EW_NET_FAULT_NO_MODEM;
+    ew_net_state_fault(errno == EBUSY ? EW_NET_FAULT_BUSY : EW_NET_FAULT_NO_MODEM);
     printf("[ew-at] forget failed: modem busy/unavailable\n");
     return 1;
   }
   if (at_wake(fd) != 0) {
-    g_last_fault = EW_NET_FAULT_NO_MODEM;
+    ew_net_state_fault(EW_NET_FAULT_NO_MODEM);
     at_end(fd);
     printf("[ew-at] forget failed: wake failed\n");
     return 2;
@@ -1576,7 +1596,7 @@ int ew_wifi_forget(void)
 
   n = at_tx(fd, "AT+CWAUTOCONN=0", resp, sizeof(resp), 800, 1500, 0);
   if (n <= 0 || !resp_ok(resp) || resp_fail(resp)) {
-    g_last_fault = EW_NET_FAULT_RESPONSE;
+    ew_net_state_fault(EW_NET_FAULT_RESPONSE);
     at_end(fd);
     printf("[ew-at] forget failed: could not disable auto-connect\n");
     return 3;
@@ -1585,7 +1605,7 @@ int ew_wifi_forget(void)
   n = at_tx(fd, "AT+CWQAP", resp, sizeof(resp), 1500, 4000, 0);
   print_rx(resp);
   if (n <= 0 || !resp_ok(resp) || resp_fail(resp)) {
-    g_last_fault = EW_NET_FAULT_RESPONSE;
+    ew_net_state_fault(EW_NET_FAULT_RESPONSE);
     at_end(fd);
     printf("[ew-at] forget failed: CWQAP rejected\n");
     return 4;
@@ -1594,7 +1614,7 @@ int ew_wifi_forget(void)
   /* Do not report success or erase credentials while the station still has IP. */
   usleep(300000);
   if (query_sta_ip(fd, ip, sizeof(ip)) == 0) {
-    g_last_fault = EW_NET_FAULT_RESPONSE;
+    ew_net_state_fault(EW_NET_FAULT_RESPONSE);
     at_end(fd);
     printf("[ew-at] forget failed: still connected ip=%s\n", ip);
     return 5;
@@ -1602,13 +1622,13 @@ int ew_wifi_forget(void)
   at_end(fd);
 
   if (unlink(EW_WIFI_CONF) != 0 && errno != ENOENT) {
-    g_last_fault = EW_NET_FAULT_RESPONSE;
+    ew_net_state_fault(EW_NET_FAULT_RESPONSE);
     printf("[ew-at] forget failed: unlink errno=%d\n", errno);
     return 6;
   }
   printf("[ew-at] disconnected; credentials cleared\n");
   ew_net_state_publish(EW_NET_LINK_IDLE, NULL);
-  g_last_fault = EW_NET_FAULT_OK;
+  ew_net_state_fault(EW_NET_FAULT_OK);
   return 0;
 }
 
@@ -1622,7 +1642,7 @@ int ew_wifi_bringup(char *out, unsigned out_sz)
   if (out != NULL && out_sz > 0) {
     out[0] = '\0';
   }
-  g_last_fault = EW_NET_FAULT_OK;
+  ew_net_state_fault(EW_NET_FAULT_OK);
 
   /* 模组自身会记住上次的 AP，先看它是不是已经上线了 */
   st = ew_wifi_probe(0, ip, sizeof(ip));
@@ -1641,9 +1661,9 @@ int ew_wifi_bringup(char *out, unsigned out_sz)
   }
 
   if (ew_wifi_cred_load(ssid, sizeof(ssid), pass, sizeof(pass)) != 0) {
-    g_last_fault = EW_NET_FAULT_NO_CREDENTIALS;
+    ew_net_state_fault(EW_NET_FAULT_NO_CREDENTIALS);
     if (out != NULL && out_sz > 0) {
-      snprintf(out, out_sz, "%s", ew_net_fault_text(g_last_fault));
+      snprintf(out, out_sz, "%s", ew_net_fault_text(ew_net_state_last_fault()));
     }
     printf("[ew-at] AT ok, no saved credentials (use WiFi page)\n");
     return 0;
@@ -1714,12 +1734,13 @@ static int collect_body(int fd, char *out, unsigned out_sz, int idle_ms)
   return (int)n;
 }
 
-ew_wifi_http_result_t ew_wifi_http_ssl_post(const char *host, unsigned port,
+ew_wifi_http_result_t ew_wifi_http_ssl_post_ex(const char *host, unsigned port,
                                             const char *path,
                                             const char *api_key,
                                             const char *json_body,
-                                            char *resp, unsigned resp_sz)
+                                            char *resp, unsigned resp_sz, ew_net_fault_t *detail)
 {
+  ew_net_fault_t fault = EW_NET_FAULT_OK;
   static char http[1800];
   char cmd[192];
   char scratch[512];
@@ -1730,10 +1751,10 @@ ew_wifi_http_result_t ew_wifi_http_ssl_post(const char *host, unsigned port,
   unsigned hlen;
 
   if (host == NULL || path == NULL || json_body == NULL) {
-    g_last_fault = EW_NET_FAULT_HTTP_BAD;
-    return EW_WIFI_HTTP_INVALID;
+    fault = EW_NET_FAULT_HTTP_BAD;
+    return wifi_http_result(EW_WIFI_HTTP_INVALID, fault, detail);
   }
-  g_last_fault = EW_NET_FAULT_OK;
+  fault = EW_NET_FAULT_OK;
   if (port == 0) {
     port = 443;
   }
@@ -1750,9 +1771,9 @@ ew_wifi_http_result_t ew_wifi_http_ssl_post(const char *host, unsigned port,
                             path, host, api_key ? api_key : "",
                             (unsigned)strlen(json_body), json_body);
   if (hlen >= sizeof(http) - 1) {
-    g_last_fault = EW_NET_FAULT_REQUEST_TOO_LONG;
+    fault = EW_NET_FAULT_REQUEST_TOO_LONG;
     printf("[ew-at] http too long\n");
-    return EW_WIFI_HTTP_INVALID;
+    return wifi_http_result(EW_WIFI_HTTP_INVALID, fault, detail);
   }
 
   dst = (resp != NULL && resp_sz > 8) ? resp : scratch;
@@ -1761,14 +1782,14 @@ ew_wifi_http_result_t ew_wifi_http_ssl_post(const char *host, unsigned port,
 
   fd = at_begin();
   if (fd < 0) {
-    g_last_fault = errno == EBUSY ? EW_NET_FAULT_BUSY : EW_NET_FAULT_NO_MODEM;
-    return EW_WIFI_HTTP_AT_BUSY;
+    fault = errno == EBUSY ? EW_NET_FAULT_BUSY : EW_NET_FAULT_NO_MODEM;
+    return wifi_http_result(EW_WIFI_HTTP_AT_BUSY, fault, detail);
   }
   if (at_wake(fd) != 0) {
-    g_last_fault = EW_NET_FAULT_NO_MODEM;
+    fault = EW_NET_FAULT_NO_MODEM;
     at_end(fd);
     printf("[ew-at] http: modem down\n");
-    return EW_WIFI_HTTP_MODEM_DOWN;
+    return wifi_http_result(EW_WIFI_HTTP_MODEM_DOWN, fault, detail);
   }
 
   (void)at_tx(fd, "AT+CIPMUX=0", scratch, sizeof(scratch), 800, 1500, 0);
@@ -1776,50 +1797,50 @@ ew_wifi_http_result_t ew_wifi_http_ssl_post(const char *host, unsigned port,
   (void)at_tx(fd, "AT+CIPCLOSE", scratch, sizeof(scratch), 800, 1500, 0);
   n = at_tx(fd, "AT+CIPSSLCCONF=0", scratch, sizeof(scratch), 800, 1500, 0);
   if (n <= 0 || !resp_ok(scratch) || resp_fail(scratch)) {
-    g_last_fault = EW_NET_FAULT_TLS_FAILED;
+    fault = EW_NET_FAULT_TLS_FAILED;
     print_rx(scratch);
     at_end(fd);
     printf("[ew-at] SSL client config fail\n");
-    return EW_WIFI_HTTP_TLS;
+    return wifi_http_result(EW_WIFI_HTTP_TLS, fault, detail);
   }
 
   /* MiMo/CDN requires TLS SNI; without it ESP-AT returns ERROR at CIPSTART. */
   snprintf(cmd, sizeof(cmd), "AT+CIPSSLCSNI=\"%s\"", host);
   n = at_tx(fd, cmd, scratch, sizeof(scratch), 800, 2000, 0);
   if (n <= 0 || !resp_ok(scratch) || resp_fail(scratch)) {
-    g_last_fault = EW_NET_FAULT_TLS_FAILED;
+    fault = EW_NET_FAULT_TLS_FAILED;
     print_rx(scratch);
     at_end(fd);
     printf("[ew-at] SSL SNI config fail\n");
-    return EW_WIFI_HTTP_TLS;
+    return wifi_http_result(EW_WIFI_HTTP_TLS, fault, detail);
   }
 
   snprintf(cmd, sizeof(cmd), "AT+CIPSTART=\"SSL\",\"%s\",%u", host, port);
   n = at_tx(fd, cmd, scratch, sizeof(scratch), 30000, 35000, 0);
   if (n <= 0 || resp_fail(scratch) ||
       (strstr(scratch, "CONNECT") == NULL && !resp_ok(scratch))) {
-    g_last_fault = n <= 0 ? EW_NET_FAULT_TLS_TIMEOUT :
+    fault = n <= 0 ? EW_NET_FAULT_TLS_TIMEOUT :
                             EW_NET_FAULT_TLS_FAILED;
     print_rx(scratch);
     at_end(fd);
     printf("[ew-at] SSL CIPSTART fail\n");
-    return n <= 0 ? EW_WIFI_HTTP_TIMEOUT : EW_WIFI_HTTP_TLS;
+    return wifi_http_result(n <= 0 ? EW_WIFI_HTTP_TIMEOUT : EW_WIFI_HTTP_TLS, fault, detail);
   }
 
   snprintf(cmd, sizeof(cmd), "AT+CIPSEND=%u", hlen);
   (void)at_tx(fd, cmd, scratch, sizeof(scratch), 1500, 2000, 0);
   if (strchr(scratch, '>') == NULL && wait_prompt(fd, 3000) != 0) {
-    g_last_fault = EW_NET_FAULT_HTTP_TIMEOUT;
+    fault = EW_NET_FAULT_HTTP_TIMEOUT;
     at_end(fd);
     printf("[ew-at] CIPSEND no prompt\n");
-    return EW_WIFI_HTTP_TIMEOUT;
+    return wifi_http_result(EW_WIFI_HTTP_TIMEOUT, fault, detail);
   }
 
   if (write_all(fd, http, hlen) != 0) {
-    g_last_fault = EW_NET_FAULT_HTTP_TIMEOUT;
+    fault = EW_NET_FAULT_HTTP_TIMEOUT;
     at_end(fd);
     printf("[ew-at] http body write stalled\n");
-    return EW_WIFI_HTTP_SEND;
+    return wifi_http_result(EW_WIFI_HTTP_SEND, fault, detail);
   }
   n = collect_body(fd, dst, dst_sz, 25000);
   (void)at_tx(fd, "AT+CIPCLOSE", scratch, sizeof(scratch), 800, 1500, 0);
@@ -1827,12 +1848,16 @@ ew_wifi_http_result_t ew_wifi_http_ssl_post(const char *host, unsigned port,
 
   printf("[ew-at] http bytes=%d\n", n);
   if (n > 16) {
-    g_last_fault = EW_NET_FAULT_OK;
-    return EW_WIFI_HTTP_OK;
+    fault = EW_NET_FAULT_OK;
+    return wifi_http_result(EW_WIFI_HTTP_OK, fault, detail);
   }
-  g_last_fault = EW_NET_FAULT_HTTP_TIMEOUT;
-  return EW_WIFI_HTTP_TIMEOUT;
+  fault = EW_NET_FAULT_HTTP_TIMEOUT;
+  return wifi_http_result(EW_WIFI_HTTP_TIMEOUT, fault, detail);
 }
+ew_wifi_http_result_t ew_wifi_http_ssl_post(const char *host, unsigned port,
+ const char *path, const char *key, const char *body, char *response, unsigned size)
+{ return ew_wifi_http_ssl_post_ex(host, port, path, key, body, response, size, NULL); }
+
 
 #else /* !__NuttX__ —— host smoke 用的空实现 */
 
@@ -1859,15 +1884,19 @@ int ew_wifi_at_status(void)
   return 0;
 }
 
-ew_wifi_state_t ew_wifi_probe(int check_inet, char *ip, unsigned ip_sz)
+ew_wifi_state_t ew_wifi_probe_ex(int check_inet, char *ip, unsigned ip_sz, ew_net_fault_t *detail)
 {
+  ew_net_fault_t fault = EW_NET_FAULT_OK;
   (void)check_inet;
   if (ip != NULL && ip_sz > 0) {
     ip[0] = '\0';
   }
-  g_last_fault = EW_NET_FAULT_NO_MODEM;
-  return EW_WIFI_DOWN;
+  fault = EW_NET_FAULT_NO_MODEM;
+  return wifi_probe_result(EW_WIFI_DOWN, fault, detail);
 }
+ew_wifi_state_t ew_wifi_probe(int check_inet, char *ip, unsigned ip_sz)
+{ return ew_wifi_probe_ex(check_inet, ip, ip_sz, NULL); }
+
 
 void ew_wifi_scan_hint_clear(void)
 {
@@ -1883,7 +1912,7 @@ int ew_wifi_scan(ew_wifi_ap_t *aps, int max)
 {
   (void)aps;
   (void)max;
-  g_last_fault = EW_NET_FAULT_NO_MODEM;
+  ew_net_state_fault(EW_NET_FAULT_NO_MODEM);
   return 0;
 }
 
@@ -1901,13 +1930,13 @@ int ew_wifi_join(const char *ssid, const char *pass, char *out, unsigned out_sz)
   if (out != NULL && out_sz > 0) {
     snprintf(out, out_sz, "host stub");
   }
-  g_last_fault = EW_NET_FAULT_NO_MODEM;
+  ew_net_state_fault(EW_NET_FAULT_NO_MODEM);
   return -1;
 }
 
 int ew_wifi_forget(void)
 {
-  g_last_fault = EW_NET_FAULT_OK;
+  ew_net_state_fault(EW_NET_FAULT_OK);
   return 0;
 }
 
@@ -1926,16 +1955,17 @@ int ew_wifi_bringup(char *out, unsigned out_sz)
   if (out != NULL && out_sz > 0) {
     snprintf(out, out_sz, "AT STUB");
   }
-  g_last_fault = EW_NET_FAULT_NO_MODEM;
+  ew_net_state_fault(EW_NET_FAULT_NO_MODEM);
   return 0;
 }
 
-ew_wifi_http_result_t ew_wifi_http_ssl_post(const char *host, unsigned port,
+ew_wifi_http_result_t ew_wifi_http_ssl_post_ex(const char *host, unsigned port,
                                             const char *path,
                                             const char *api_key,
                                             const char *json_body,
-                                            char *resp, unsigned resp_sz)
+                                            char *resp, unsigned resp_sz, ew_net_fault_t *detail)
 {
+  ew_net_fault_t fault = EW_NET_FAULT_OK;
   (void)host;
   (void)port;
   (void)path;
@@ -1944,18 +1974,22 @@ ew_wifi_http_result_t ew_wifi_http_ssl_post(const char *host, unsigned port,
   if (resp != NULL && resp_sz > 0) {
     snprintf(resp, resp_sz, "host stub");
   }
-  g_last_fault = EW_NET_FAULT_NO_MODEM;
-  return EW_WIFI_HTTP_MODEM_DOWN;
+  fault = EW_NET_FAULT_NO_MODEM;
+  return wifi_http_result(EW_WIFI_HTTP_MODEM_DOWN, fault, detail);
 }
+ew_wifi_http_result_t ew_wifi_http_ssl_post(const char *host, unsigned port,
+ const char *path, const char *key, const char *body, char *response, unsigned size)
+{ return ew_wifi_http_ssl_post_ex(host, port, path, key, body, response, size, NULL); }
+
 
 #endif /* __NuttX__ */
 
 ew_net_fault_t ew_wifi_last_fault(void)
 {
-  return g_last_fault;
+  return ew_net_state_last_fault();
 }
 
 const char *ew_wifi_last_fault_text(void)
 {
-  return ew_net_fault_text(g_last_fault);
+  return ew_net_fault_text(ew_net_state_last_fault());
 }

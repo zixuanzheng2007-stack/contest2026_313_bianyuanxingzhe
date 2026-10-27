@@ -26,6 +26,9 @@ int main(void) {
   ew_net_state_error(EW_NET_ERR_TIMEOUT);
   assert(ew_net_state_snapshot(&s) == 0);
   assert(s.error == EW_NET_ERR_TIMEOUT && s.generation >= 2);
+  ew_net_state_fault(EW_NET_FAULT_HTTP_RATE_LIMIT);
+  assert(ew_net_state_snapshot(&s)==0 && s.fault==EW_NET_FAULT_HTTP_RATE_LIMIT);
+  assert(ew_net_state_last_fault()==EW_NET_FAULT_HTTP_RATE_LIMIT);
   puts("PASS: network snapshot ownership and error publication");
   return 0;
 }

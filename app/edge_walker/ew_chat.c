@@ -356,13 +356,7 @@ typedef struct {
   char prompt[256];
 } ew_ask_job_t;
 
-static void make_llm_reply(ew_llm_result_t result, char *out, unsigned out_sz)
-{
-  if (result != EW_LLM_OK) {
-    snprintf(out, out_sz, "MiMo 暂不可用 [%s]；本地雷达告警不受影响。",
-             ew_net_fault_code(ew_llm_last_fault()));
-  }
-}
+
 
 static void *ask_thread(void *arg)
 {
@@ -371,8 +365,11 @@ static void *ask_thread(void *arg)
   ew_llm_result_t result;
 
   reply[0] = '\0';
+  /* The bounded result already contains this request's failure detail. */
   result = ew_llm_ask(job->prompt, reply, sizeof(reply));
-  make_llm_reply(result, reply, sizeof(reply));
+  if (result != EW_LLM_OK && reply[0] == '\0') {
+    snprintf(reply, sizeof(reply), "请求失败，请稍后重试。");
+  }
 
   pthread_mutex_lock(&g_reply_mu);
   if (job->generation == g_ask_generation) {
@@ -429,12 +426,8 @@ static void start_ask(const char *text)
 
   job = (ew_ask_job_t *)malloc(sizeof(*job));
   if (job == NULL) {
-    ew_llm_result_t result;
-
-    g_reply[0] = '\0';
-    result = ew_llm_ask(g_pending, g_reply, sizeof(g_reply));
-    make_llm_reply(result, g_reply, sizeof(g_reply));
     pthread_mutex_lock(&g_reply_mu);
+    snprintf(g_reply, sizeof(g_reply), "系统资源不足，请稍后重试。");
     g_reply_ready = 1;
     pthread_mutex_unlock(&g_reply_mu);
     return;
@@ -445,12 +438,8 @@ static void start_ask(const char *text)
   pthread_attr_init(&attr);
   pthread_attr_setstacksize(&attr, 65536);
   if (pthread_create(&th, &attr, ask_thread, job) != 0) {
-    ew_llm_result_t result;
-
-    g_reply[0] = '\0';
-    result = ew_llm_ask(g_pending, g_reply, sizeof(g_reply));
-    make_llm_reply(result, g_reply, sizeof(g_reply));
     pthread_mutex_lock(&g_reply_mu);
+    snprintf(g_reply, sizeof(g_reply), "系统资源不足，请稍后重试。");
     g_reply_ready = 1;
     pthread_mutex_unlock(&g_reply_mu);
     free(job);
@@ -1065,10 +1054,11 @@ static void poll_reply(void)
 {
   char reply[EW_CHAT_TEXT_MAX];
 
+  pthread_mutex_lock(&g_reply_mu);
   if (!g_reply_ready) {
+    pthread_mutex_unlock(&g_reply_mu);
     return;
   }
-  pthread_mutex_lock(&g_reply_mu);
   g_reply_ready = 0;
   g_busy = 0;
   snprintf(reply, sizeof(reply), "%s", g_reply);

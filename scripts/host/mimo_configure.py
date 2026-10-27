@@ -21,7 +21,7 @@ except ImportError:
 
 BAUD = 1_000_000
 MIMO_URL = "https://token-plan-cn.xiaomimimo.com/v1/chat/completions"
-MIMO_MODEL = "mimo-v2.5"
+MIMO_MODEL = "mimo-v2.6-flash"
 CONFIG_OK = "[ew-ctl] MiMo config saved (key redacted)"
 ASK_OK = "[ew-ctl] ask ok:"
 ASK_FAIL = "[ew-ctl] ask fail:"

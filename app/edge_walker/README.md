@@ -148,7 +148,7 @@ NuttX flat 构建中，本地 JSON 入口为
 烧录前确认 SHA256 与元数据一致，未提交源码的来源另记为 source_sha256。
 
 MiMo Token Plan 使用中国集群端点
-`token-plan-cn.xiaomimimo.com:443/v1/chat/completions` 和模型 `mimo-v2.5`。
+`token-plan-cn.xiaomimimo.com:443/v1/chat/completions` 和模型 `mimo-v2.6-flash`。
 密钥格式为 `tp-...`；不要把 API key 写入仓库或固件。Windows Host
 设置临时环境变量后执行（脚本会先验证 Windows 直连，再写入开发板）：
 
@@ -200,3 +200,13 @@ PC 入口为 `scripts/host/mobile_serial_gateway.py`，仅回环网络监听和�
 
 本次完成主机回归和真实 ARM 对象编译，尚无新完整固件的链接、烧录及真机验收。软件证据见 `docs/协作/手机只读网关验收_2026-10-24.md`。
 
+
+## 审核修正后的开发入口（2026-10-28）
+
+网络和模型的 `_ex` API 返回单次调用的故障细节；共享诊断信息集中在
+`ew_net_state` 的互斥快照中，不能用“最后一次故障”判断另一请求的结果。
+页面代际隔离保留；资源不足立即返回重试提示，不在 UI 线程联网。
+热点直连继续留在独立实验路线，本默认开发实现不包含直连监听器。
+
+Stage3 封包要求脱敏私有构建的隔离清单和 `source_receipt.json`，校验源码、
+ELF/bin/config 与构建收据一致；主机校验通过不表示板端已通过。

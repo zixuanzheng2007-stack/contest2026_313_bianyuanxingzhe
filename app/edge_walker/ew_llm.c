@@ -38,14 +38,20 @@
 #define EW_MIMO_HOST  "token-plan-cn.xiaomimimo.com"
 #define EW_MIMO_PATH  "/v1/chat/completions"
 #define EW_MIMO_PORT  "443"
-#define EW_MIMO_MODEL "mimo-v2.5"
+#define EW_MIMO_MODEL "mimo-v2.6-flash"
 
 #define EW_LLM_BODY "/tmp/ew_llm_body.json"
 #define EW_LLM_OUT  "/tmp/ew_llm_out.json"
 #define EW_LLM_CONFIG_TMP EW_LLM_CONFIG ".tmp"
 #define EW_LLM_CONFIG_BAK EW_LLM_CONFIG ".bak"
 
-static volatile ew_net_fault_t g_last_fault = EW_NET_FAULT_OK;
+
+
+static void migrate_mimo_model(const char *host, char *model, unsigned size)
+{
+  if (strcmp(host, EW_MIMO_HOST) == 0 && strcmp(model, "mimo-v2.5") == 0)
+    snprintf(model, size, "%s", EW_MIMO_MODEL);
+}
 
 static int read_file(const char *path, char *buf, unsigned sz)
 {
@@ -267,7 +273,7 @@ int ew_llm_restore_config(char *out, unsigned out_sz)
 }
 
 static ew_llm_result_t extract_content(const char *json, char *out,
-                                       unsigned out_sz)
+                                       unsigned out_sz, ew_net_fault_t *fault)
 {
   const char *choices;
   char emsg[160];
@@ -276,30 +282,30 @@ static ew_llm_result_t extract_content(const char *json, char *out,
       json_str(json, "message", emsg, sizeof(emsg)) == 0) {
     if (strstr(emsg, "auth") != NULL || strstr(emsg, "API key") != NULL ||
         strstr(emsg, "api_key") != NULL) {
-      g_last_fault = EW_NET_FAULT_HTTP_AUTH;
+      (*fault) = EW_NET_FAULT_HTTP_AUTH;
       snprintf(out, out_sz, "LLM unavailable [%s]",
-               ew_net_fault_code(g_last_fault));
+               ew_net_fault_code((*fault)));
       return EW_LLM_ERR_AUTH;
     }
-    g_last_fault = EW_NET_FAULT_LLM_REPLY_BAD;
+    (*fault) = EW_NET_FAULT_LLM_REPLY_BAD;
     snprintf(out, out_sz, "LLM unavailable [%s]",
-             ew_net_fault_code(g_last_fault));
+             ew_net_fault_code((*fault)));
     return EW_LLM_ERR_RESPONSE;
   }
 
   choices = strstr(json, "\"choices\"");
   if (choices == NULL) {
-    g_last_fault = EW_NET_FAULT_LLM_REPLY_BAD;
+    (*fault) = EW_NET_FAULT_LLM_REPLY_BAD;
     snprintf(out, out_sz, "LLM unavailable [%s]",
-             ew_net_fault_code(g_last_fault));
+             ew_net_fault_code((*fault)));
     return EW_LLM_ERR_RESPONSE;
   }
   if (json_str(choices, "content", out, out_sz) == 0) {
     return EW_LLM_OK;
   }
-  g_last_fault = EW_NET_FAULT_LLM_REPLY_BAD;
+  (*fault) = EW_NET_FAULT_LLM_REPLY_BAD;
   snprintf(out, out_sz, "LLM unavailable [%s]",
-           ew_net_fault_code(g_last_fault));
+           ew_net_fault_code((*fault)));
   return EW_LLM_ERR_RESPONSE;
 }
 
@@ -324,8 +330,21 @@ static const char *http_body(const char *raw)
 }
 #endif
 
-ew_llm_result_t ew_llm_ask(const char *prompt, char *out, unsigned out_sz)
+static ew_llm_result_t llm_finish(ew_llm_result_t result,
+                                 ew_net_fault_t fault, ew_net_fault_t *detail)
 {
+  if (detail != NULL) *detail = fault;
+  ew_net_state_fault(fault);
+  return result;
+}
+
+ew_llm_result_t ew_llm_ask_ex(const char *prompt, char *out, unsigned out_sz, ew_net_fault_t *detail)
+{
+  ew_net_fault_t fault = EW_NET_FAULT_OK;
+  if (prompt == NULL || out == NULL || out_sz < 8) {
+    fault = EW_NET_FAULT_HTTP_BAD;
+    return llm_finish(EW_LLM_ERR_INVALID, fault, detail);
+  }
 #ifdef __NuttX__
   char cfg[4096];
   char host[128];
@@ -344,11 +363,7 @@ ew_llm_result_t ew_llm_ask(const char *prompt, char *out, unsigned out_sz)
   ew_wifi_state_t wifi_state;
   int have_runtime;
 
-  if (prompt == NULL || out == NULL || out_sz < 8) {
-    g_last_fault = EW_NET_FAULT_HTTP_BAD;
-    return EW_LLM_ERR_INVALID;
-  }
-  g_last_fault = EW_NET_FAULT_OK;
+  fault = EW_NET_FAULT_OK;
   out[0] = '\0';
 
   snprintf(host, sizeof(host), "%s", EW_MIMO_HOST);
@@ -370,32 +385,33 @@ ew_llm_result_t ew_llm_ask(const char *prompt, char *out, unsigned out_sz)
     }
   }
   if (key[0] == '\0') {
-    g_last_fault = have_runtime ? EW_NET_FAULT_API_KEY_MISSING :
+    fault = have_runtime ? EW_NET_FAULT_API_KEY_MISSING :
                                   EW_NET_FAULT_CONFIG_MISSING;
     snprintf(out, out_sz, "LLM unavailable [%s]",
-             ew_net_fault_code(g_last_fault));
+             ew_net_fault_code(fault));
     ew_net_state_error(EW_NET_ERR_CONFIG);
-    return EW_LLM_ERR_CONFIG;
+    return llm_finish(EW_LLM_ERR_CONFIG, fault, detail);
   }
+  migrate_mimo_model(host, model, sizeof(model));
   printf("[ew-ask] config source=%s\n",
          have_runtime && runtime_key[0] != '\0' ? "runtime" : "bootstrap");
 
-  wifi_state = ew_wifi_probe(0, NULL, 0);
+  wifi_state = ew_wifi_probe_ex(0, NULL, 0, &transport_fault);
   if (wifi_state == EW_WIFI_DOWN) {
-    g_last_fault = ew_wifi_last_fault();
-    if (g_last_fault == EW_NET_FAULT_OK) {
-      g_last_fault = EW_NET_FAULT_NO_MODEM;
+    fault = transport_fault;
+    if (fault == EW_NET_FAULT_OK) {
+      fault = EW_NET_FAULT_NO_MODEM;
     }
     snprintf(out, out_sz, "ESP-AT unavailable or busy");
     ew_net_state_error(EW_NET_ERR_AT_BUSY);
-    return EW_LLM_ERR_AT_BUSY;
+    return llm_finish(EW_LLM_ERR_AT_BUSY, fault, detail);
   }
   if (wifi_state == EW_WIFI_IDLE) {
-    g_last_fault = EW_NET_FAULT_NO_CREDENTIALS;
+    fault = EW_NET_FAULT_NO_CREDENTIALS;
     snprintf(out, out_sz, "LLM unavailable [%s]",
-             ew_net_fault_code(g_last_fault));
+             ew_net_fault_code(fault));
     ew_net_state_error(EW_NET_ERR_NO_WIFI);
-    return EW_LLM_ERR_NO_WIFI;
+    return llm_finish(EW_LLM_ERR_NO_WIFI, fault, detail);
   }
   iport = (port[0] != '\0') ? (unsigned)atoi(port) : 443u;
   if (iport == 0) {
@@ -403,15 +419,15 @@ ew_llm_result_t ew_llm_ask(const char *prompt, char *out, unsigned out_sz)
   }
 
   if (json_escape(prompt, esc, sizeof(esc)) != 0) {
-    g_last_fault = EW_NET_FAULT_REQUEST_TOO_LONG;
+    fault = EW_NET_FAULT_REQUEST_TOO_LONG;
     snprintf(out, out_sz, "LLM unavailable [%s]",
-             ew_net_fault_code(g_last_fault));
-    return EW_LLM_ERR_INVALID;
+             ew_net_fault_code(fault));
+    return llm_finish(EW_LLM_ERR_INVALID, fault, detail);
   }
   {
     int body_len = snprintf(
       body, sizeof(body),
-      "{\"model\":\"%s\",\"messages\":["
+      "{\"model\":\"%s\",\"max_completion_tokens\":384,\"messages\":["
       "{\"role\":\"system\",\"content\":\"You are Edge Walker on openvela. "
       "Answer in Simplified Chinese if the user uses Chinese, else English. "
       "2-4 short sentences. No emoji, no markdown. "
@@ -420,103 +436,106 @@ ew_llm_result_t ew_llm_ask(const char *prompt, char *out, unsigned out_sz)
       model, esc);
 
     if (body_len < 0 || (unsigned)body_len >= sizeof(body)) {
-      g_last_fault = EW_NET_FAULT_REQUEST_TOO_LONG;
+      fault = EW_NET_FAULT_REQUEST_TOO_LONG;
       snprintf(out, out_sz, "LLM unavailable [%s]",
-               ew_net_fault_code(g_last_fault));
-      return EW_LLM_ERR_INVALID;
+               ew_net_fault_code(fault));
+      return llm_finish(EW_LLM_ERR_INVALID, fault, detail);
     }
   }
 
   printf("[ew-ask] AT SSL POST %s:%u%s\n", host, iport, path);
-  http_rc = ew_wifi_http_ssl_post(host, iport, path, key, body, raw,
-                                  sizeof(raw));
+  http_rc = ew_wifi_http_ssl_post_ex(host, iport, path, key, body, raw,
+                                  sizeof(raw), &transport_fault);
   if (http_rc != EW_WIFI_HTTP_OK) {
-    transport_fault = ew_wifi_last_fault();
+    transport_fault = transport_fault;
     switch (http_rc) {
       case EW_WIFI_HTTP_AT_BUSY:
-        g_last_fault = transport_fault == EW_NET_FAULT_NO_MODEM ?
+        fault = transport_fault == EW_NET_FAULT_NO_MODEM ?
                        EW_NET_FAULT_NO_MODEM : EW_NET_FAULT_BUSY;
         snprintf(out, out_sz, "LLM unavailable [%s]",
-                 ew_net_fault_code(g_last_fault));
+                 ew_net_fault_code(fault));
         ew_net_state_error(EW_NET_ERR_AT_BUSY);
-        return EW_LLM_ERR_AT_BUSY;
+        return llm_finish(EW_LLM_ERR_AT_BUSY, fault, detail);
       case EW_WIFI_HTTP_MODEM_DOWN:
-        g_last_fault = EW_NET_FAULT_NO_MODEM;
+        fault = EW_NET_FAULT_NO_MODEM;
         snprintf(out, out_sz, "LLM unavailable [%s]",
-                 ew_net_fault_code(g_last_fault));
+                 ew_net_fault_code(fault));
         ew_net_state_error(EW_NET_ERR_AT_BUSY);
-        return EW_LLM_ERR_AT_BUSY;
+        return llm_finish(EW_LLM_ERR_AT_BUSY, fault, detail);
       case EW_WIFI_HTTP_TLS:
-        g_last_fault = transport_fault == EW_NET_FAULT_TLS_TIMEOUT ?
+        fault = transport_fault == EW_NET_FAULT_TLS_TIMEOUT ?
                        EW_NET_FAULT_TLS_TIMEOUT : EW_NET_FAULT_TLS_FAILED;
         snprintf(out, out_sz, "LLM unavailable [%s]",
-                 ew_net_fault_code(g_last_fault));
+                 ew_net_fault_code(fault));
         ew_net_state_error(EW_NET_ERR_TLS);
-        return EW_LLM_ERR_TLS;
+        return llm_finish(EW_LLM_ERR_TLS, fault, detail);
       case EW_WIFI_HTTP_TIMEOUT:
-        g_last_fault = transport_fault == EW_NET_FAULT_TLS_TIMEOUT ?
+        fault = transport_fault == EW_NET_FAULT_TLS_TIMEOUT ?
                        EW_NET_FAULT_TLS_TIMEOUT : EW_NET_FAULT_HTTP_TIMEOUT;
         snprintf(out, out_sz, "LLM unavailable [%s]",
-                 ew_net_fault_code(g_last_fault));
+                 ew_net_fault_code(fault));
         ew_net_state_error(EW_NET_ERR_TIMEOUT);
-        return EW_LLM_ERR_TIMEOUT;
+        return llm_finish(EW_LLM_ERR_TIMEOUT, fault, detail);
       default:
-        g_last_fault = transport_fault != EW_NET_FAULT_OK ?
+        fault = transport_fault != EW_NET_FAULT_OK ?
                        transport_fault : EW_NET_FAULT_HTTP_BAD;
         snprintf(out, out_sz, "LLM unavailable [%s]",
-                 ew_net_fault_code(g_last_fault));
+                 ew_net_fault_code(fault));
         ew_net_state_error(EW_NET_ERR_RESPONSE);
-        return EW_LLM_ERR_RESPONSE;
+        return llm_finish(EW_LLM_ERR_RESPONSE, fault, detail);
     }
   }
   {
     int status = ew_net_http_status(raw);
 
     if (status < 200 || status >= 300) {
-      g_last_fault = status < 0 ? EW_NET_FAULT_HTTP_BAD :
+      fault = status < 0 ? EW_NET_FAULT_HTTP_BAD :
                                   ew_net_fault_from_http_status(status);
-      ew_net_state_error(g_last_fault == EW_NET_FAULT_HTTP_AUTH ?
+      ew_net_state_error(fault == EW_NET_FAULT_HTTP_AUTH ?
                          EW_NET_ERR_AUTH : EW_NET_ERR_RESPONSE);
       snprintf(out, out_sz, "LLM unavailable [%s]",
-               ew_net_fault_code(g_last_fault));
-      return g_last_fault == EW_NET_FAULT_HTTP_AUTH ?
-             EW_LLM_ERR_AUTH : EW_LLM_ERR_RESPONSE;
+               ew_net_fault_code(fault));
+      return llm_finish(fault == EW_NET_FAULT_HTTP_AUTH ?
+             EW_LLM_ERR_AUTH : EW_LLM_ERR_RESPONSE, fault, detail);
     }
   }
   payload = http_body(raw);
   if (payload == NULL || payload[0] == '\0') {
-    g_last_fault = EW_NET_FAULT_LLM_REPLY_BAD;
+    fault = EW_NET_FAULT_LLM_REPLY_BAD;
     snprintf(out, out_sz, "LLM unavailable [%s]",
-             ew_net_fault_code(g_last_fault));
+             ew_net_fault_code(fault));
     ew_net_state_error(EW_NET_ERR_RESPONSE);
-    return EW_LLM_ERR_RESPONSE;
+    return llm_finish(EW_LLM_ERR_RESPONSE, fault, detail);
   }
   {
-    ew_llm_result_t result = extract_content(payload, out, out_sz);
+    ew_llm_result_t result = extract_content(payload, out, out_sz, &fault);
 
     if (result == EW_LLM_OK) {
-      g_last_fault = EW_NET_FAULT_OK;
+      fault = EW_NET_FAULT_OK;
       ew_net_state_error(EW_NET_ERR_NONE);
     } else if (result == EW_LLM_ERR_AUTH) {
       ew_net_state_error(EW_NET_ERR_AUTH);
     } else {
       ew_net_state_error(EW_NET_ERR_RESPONSE);
     }
-    return result;
+    return llm_finish(result, fault, detail);
   }
 #else
-  g_last_fault = EW_NET_FAULT_OK;
+  fault = EW_NET_FAULT_OK;
   snprintf(out, out_sz, "host stub: %s", prompt ? prompt : "");
-  return EW_LLM_OK;
+  return llm_finish(EW_LLM_OK, fault, detail);
 #endif
 }
 
 ew_net_fault_t ew_llm_last_fault(void)
 {
-  return g_last_fault;
+  return ew_net_state_last_fault();
 }
 
 const char *ew_llm_last_fault_text(void)
 {
-  return ew_net_fault_text(g_last_fault);
+  return ew_net_fault_text(ew_net_state_last_fault());
 }
+
+ew_llm_result_t ew_llm_ask(const char *prompt, char *out, unsigned out_sz)
+{ return ew_llm_ask_ex(prompt, out, out_sz, NULL); }

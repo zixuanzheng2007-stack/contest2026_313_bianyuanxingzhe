@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def main():
     source = (ROOT / "app/edge_walker/ew_wifi_at.c").read_text(encoding="utf-8")
-    probe_start = source.index("ew_wifi_state_t ew_wifi_probe(")
+    probe_start = source.index("ew_wifi_state_t ew_wifi_probe_ex(")
     probe_end = source.index("\n}", probe_start) + 2
     harness = r'''
 #include <assert.h>
@@ -19,6 +19,8 @@ def main():
 #include <string.h>
 #include "ew_wifi_at.h"
 #include "ew_net_state.h"
+static ew_net_fault_t published_fault;
+void ew_net_state_fault(ew_net_fault_t fault) { published_fault=fault; }
 static int g_at_mu, lock_calls, unlock_after, lock_error, sleep_ms;
 static int tx_calls, fail_tx, fail_kind, publish_calls, state_errors;
 static int fake_mutex_trylock(int *mu) {
@@ -54,9 +56,9 @@ static void ew_net_state_error_test(ew_net_error_t error) {
 #define ew_net_state_publish ew_net_state_publish_test
 #define ew_net_state_error ew_net_state_error_test
 ''' + "\n".join(function(source, name) for name in (
-        "resp_ok", "resp_fail", "at_lock", "at_station_setup")) + source[probe_start:probe_end] + r'''
+        "resp_ok", "resp_fail", "at_lock", "at_station_setup")) + source[source.index("static ew_wifi_state_t wifi_probe_result("):source.index("\n}", source.index("static ew_wifi_state_t wifi_probe_result(")) + 2] + source[probe_start:probe_end] + r'''
 int main(void) {
-  char ip[24]; int kind;
+  char ip[24]; int kind; ew_net_fault_t fault;
   assert(resp_ok("OK\r\n") && resp_ok("AT\r\n\r\nOK\r\n"));
   assert(!resp_ok("NOTOK\r\n") && !resp_ok("BROK\r\n"));
   assert(!resp_ok("OK") && !resp_ok(NULL));
@@ -73,8 +75,9 @@ int main(void) {
     assert(at_station_setup(1)==-1 && tx_calls==2);
   }
   tx_calls=fail_tx=0;assert(at_station_setup(1)==0 && tx_calls==2);
-  assert(ew_wifi_probe(0,ip,sizeof(ip))==EW_WIFI_DOWN);
+  assert(ew_wifi_probe_ex(0,ip,sizeof(ip),&fault)==EW_WIFI_DOWN);
   assert(ip[0]==0 && publish_calls==0 && state_errors==1);
+  assert(fault==EW_NET_FAULT_BUSY && published_fault==EW_NET_FAULT_BUSY);
   puts("PASS: bounded contention, early lock errors, strict OK, setup rejection, busy preserves link");
   return 0;
 }

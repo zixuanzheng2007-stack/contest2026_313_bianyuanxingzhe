@@ -4,6 +4,8 @@
 #ifndef EDGE_WALKER_EW_NET_STATE_H
 #define EDGE_WALKER_EW_NET_STATE_H
 
+#include "ew_net_status.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -31,10 +33,13 @@ typedef struct {
   ew_net_error_t error;
   char ip[24];
   unsigned long generation;
+  ew_net_fault_t fault;
 } ew_net_snapshot_t;
 
 void ew_net_state_publish(ew_net_link_t link, const char *ip);
 void ew_net_state_error(ew_net_error_t error);
+void ew_net_state_fault(ew_net_fault_t fault);
+ew_net_fault_t ew_net_state_last_fault(void);
 int ew_net_state_snapshot(ew_net_snapshot_t *out);
 
 #ifdef __cplusplus

@@ -28,8 +28,11 @@ typedef enum {
 
 /* 阻塞调用。reply 写入 out（UTF-8），失败返回可分层的错误码。 */
 ew_llm_result_t ew_llm_ask(const char *prompt, char *out, unsigned out_sz);
+/* Request-scoped detail; the diagnostic snapshot is not a result channel. */
+ew_llm_result_t ew_llm_ask_ex(const char *prompt, char *out, unsigned out_sz,
+                              ew_net_fault_t *detail);
 
-/* Stable detail for the latest request; the ew_llm_result_t API is unchanged. */
+/* Shared diagnostic view only. Use ask_ex detail for a particular request. */
 ew_net_fault_t ew_llm_last_fault(void);
 const char *ew_llm_last_fault_text(void);
 

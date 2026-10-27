@@ -118,6 +118,13 @@ ew_wifi_http_result_t ew_wifi_http_ssl_post(const char *host, unsigned port,
 ew_net_fault_t ew_wifi_last_fault(void);
 const char *ew_wifi_last_fault_text(void);
 
+/* Per-operation detail; never infer it from a later global diagnostic read. */
+ew_wifi_state_t ew_wifi_probe_ex(int check_inet, char *ip, unsigned ip_sz,
+                                ew_net_fault_t *detail);
+ew_wifi_http_result_t ew_wifi_http_ssl_post_ex(const char *host, unsigned port,
+ const char *path, const char *key, const char *body, char *response, unsigned size,
+ ew_net_fault_t *detail);
+
 #ifdef __cplusplus
 }
 #endif
