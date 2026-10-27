@@ -9,8 +9,11 @@ import tempfile
 import unittest
 import uuid
 
-from stage3_delivery import DeliveryError, ROOT, seal_release, verify_package
+from stage3_delivery import DeliveryError, ROOT, seal_release, verify_package, _parse_checksums
+import hashlib
+import zipfile
 from test_firmware_candidate import fixture
+from firmware_provenance import receipt, source_digest
 
 
 class Stage3DeliveryTests(unittest.TestCase):
@@ -32,6 +35,7 @@ class Stage3DeliveryTests(unittest.TestCase):
         (directory / "nuttx").write_bytes(elf)
         (directory / "nuttx.bin").write_bytes(image)
         (directory / ".config").write_text(config, encoding="utf-8")
+        receipt(ROOT, directory, source_digest(ROOT))
         return directory
 
     def test_seal_and_verify_directory_and_zip(self):
@@ -99,6 +103,44 @@ class Stage3DeliveryTests(unittest.TestCase):
         binary.write_bytes(binary.read_bytes() + b"tamper")
         with self.assertRaises(DeliveryError):
             verify_package(Path(result["output"]))
+
+    def test_windows_absolute_unc_and_ads_paths_rejected_before_io(self):
+        for name in ['C:/outside.txt', 'C:\\outside.txt', r'\\server\share\secret',
+                     '../outside', 'folder/../outside', 'file:stream', 'CON', 'a\\b', '/absolute']:
+            with self.subTest(name=name), self.assertRaises(DeliveryError):
+                _parse_checksums(('0'*64+'  '+name+'\n').encode())
+
+    def test_empty_self_consistent_package_is_rejected(self):
+        package = self.base / 'empty'
+        package.mkdir()
+        data = json.dumps({'board_tested':False,'flash_address':'0x12010000','files':[]}).encode()
+        (package/'delivery_manifest.json').write_bytes(data)
+        (package/'SHA256SUMS').write_text(hashlib.sha256(data).hexdigest()+'  delivery_manifest.json\n')
+        archive = self.base/'empty.zip'
+        with zipfile.ZipFile(archive,'w') as output:
+            for path in package.iterdir(): output.write(path,'empty/'+path.name)
+        for path in [package,archive]:
+            with self.subTest(path=str(path)), self.assertRaises(DeliveryError): verify_package(path)
+
+    def test_secret_configuration_cannot_be_published(self):
+        main = self.build_dir('secret','main')
+        with (main/'.config').open('a') as stream: stream.write('CONFIG_REVIEW_API_KEY="SYNTHETIC_NOT_A_REAL_KEY"\n')
+        rollback = self.base/'rollback.bin';rollback.write_bytes(b'fixture')
+        with self.assertRaisesRegex((ValueError,DeliveryError),'Sensitive'):
+            seal_release(version='secret',main_build_dir=main,agent_build_dir=None,
+                         rollback_bin=rollback,output=self.output)
+        self.assertFalse((self.output/'secret.zip').exists())
+
+    def test_stale_source_receipt_cannot_label_current_source(self):
+        main = self.build_dir('old','main')
+        record = json.loads((main/'source_receipt.json').read_text())
+        record['source_tree_sha256'] = '0'*64
+        (main/'source_receipt.json').write_text(json.dumps(record))
+        rollback = self.base/'rollback.bin';rollback.write_bytes(b'fixture')
+        with self.assertRaisesRegex(DeliveryError,'provenance'):
+            seal_release(version='stale',main_build_dir=main,agent_build_dir=None,
+                         rollback_bin=rollback,output=self.output)
+        self.assertFalse((self.output/'stale.zip').exists())
 
 
 if __name__ == "__main__":

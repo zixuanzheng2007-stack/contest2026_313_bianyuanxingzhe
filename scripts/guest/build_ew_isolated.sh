@@ -113,15 +113,20 @@ for line in seed.splitlines():
 (build/'.config').write_text('\n'.join(lines)+'\n')
 (out/'isolation.json').write_text(json.dumps({'private_workspace':str(new),'rewritten_links':rewritten,
  'sanitized_config_fields':sanitized,'input_archive_sha256':os.environ['EXPECTED_ARCHIVE_SHA256'],
+ 'source_tree_sha256':manifest['source_tree_sha256'],
  'prebuilts_reused':True,'board_tested':False},indent=2))
 PY
 export OPENVELA="$WORKSPACE" CONTEST="$WORKSPACE/contest2026_313_bianyuanxingzhe"
 export PATH="$HOME/bin:$HOME/.local/bin:$WORKSPACE/prebuilts/gcc/linux-x86_64/arm-none-eabi/bin:$WORKSPACE/prebuilts/build-tools/linux-x86_64/bin:$PATH"
 export SKIP_REPO_SYNC=1
+SOURCE_INPUT_SHA=$(python3 "$CONTEST/scripts/host/firmware_provenance.py" digest --root "$CONTEST")
 
 collect_image() {
   local kind="$1" build="$2" dest="$ARTIFACT_DIR/$1"
   mkdir -p "$dest"
+  python3 "$CONTEST/scripts/host/firmware_provenance.py" record --root "$CONTEST" \
+    --build-dir "$build" --expected "$SOURCE_INPUT_SHA"
+  cp "$build/source_receipt.json" "$dest/source_receipt.json"
   cp "$build/nuttx.bin" "$dest/nuttx.bin"
   cp "$build/nuttx" "$dest/nuttx"
   cp "$build/.config" "$dest/.config"
@@ -137,7 +142,8 @@ files={n:{'sha256':hashlib.sha256((d/n).read_bytes()).hexdigest(),'bytes':(d/n).
 config=(d/'.config').read_text()
 assert ('CONFIG_EXAMPLES_AI_AGENT_VELA=y' in config)==(sys.argv[1]=='agent')
 (d/'build_manifest.json').write_text(json.dumps({'kind':sys.argv[1],'status':'pass','board_tested':False,
- 'input_archive_sha256':os.environ['EXPECTED_ARCHIVE_SHA256'],'files':files},indent=2))
+ 'input_archive_sha256':os.environ['EXPECTED_ARCHIVE_SHA256'],
+ 'source_tree_sha256':manifest['source_tree_sha256'],'files':files},indent=2))
 PY
 }
 mkdir -p "$ARTIFACT_DIR/main" "$ARTIFACT_DIR/agent"

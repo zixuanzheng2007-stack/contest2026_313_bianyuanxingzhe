@@ -39,7 +39,8 @@ def collect_files(root: Path) -> list[Path]:
     selected.extend((root / "scripts/host").glob("test_*.py"))
     # Selected modules are needed by Linux software regressions, not by firmware.
     for name in ("mobile_device_simulator.py", "mobile_serial_gateway.py", "mobile_prototype_gateway.py", "radar_replay.py",
-                 "serial_common.py", "generate_mimo_bootstrap.py"):
+                 "serial_common.py", "generate_mimo_bootstrap.py", "stage3_delivery.py",
+                 "stage3_demo_acceptance.py", "firmware_provenance.py"):
         path = root / "scripts/host" / name
         if path.is_file():
             selected.append(path)

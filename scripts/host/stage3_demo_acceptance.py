@@ -20,33 +20,47 @@ ERROR_PATTERN = re.compile(
 
 
 def analyze_transcript(text: str, runs: int) -> dict:
-    events: dict[str, list[str]] = {}
-    for event_id, stage in EVENT_PATTERN.findall(text):
-        events.setdefault(event_id, []).append(stage)
-    chains = sum(
-        stages == ["decision", "agent", "tool", "alert_output", "complete"]
-        for stages in events.values()
-    )
-    checks = {
-        "run_headers": text.count("=== STAGE3 RUN ") == runs,
-        "goto_warn": text.count("[ew-ctl] goto warn") >= runs * 2,
-        "goto_chat": text.count("[ew-ctl] goto chat") >= runs,
-        "goto_wifi": text.count("[ew-ctl] goto wifi") >= runs,
-        "fake_entry": text.count("[ew-ctl] fake ") >= runs,
-        "agent_tool_chain": chains >= runs,
-        "alert_output": text.count("[alert_output] level=") >= runs,
-        "snapshot_response": text.count("[ew-snapshot] ") >= runs,
-        "no_fatal_marker": ERROR_PATTERN.search(text) is None,
-    }
-    return {
-        "software_chain": "PASS" if all(checks.values()) else "FAIL",
-        "checks": checks,
-        "complete_event_chains": chains,
-        "runs": runs,
-        "physical_screen_buzzer_radar": "PENDING",
-        "board_tested": False,
-        "note": "Serial logs prove software dispatch only; observe the board manually.",
-    }
+    from mobile_serial_gateway import validate_snapshot, GatewayError
+    headers = list(re.finditer(r"^=== STAGE3 RUN (\d+)/(\d+) ===$", text, re.M))
+    valid_headers = (runs > 0 and len(headers) == runs and
+                     [(int(h[1]),int(h[2])) for h in headers] == [(i,runs) for i in range(1,runs+1)])
+    checks = {'run_headers':valid_headers, 'no_fatal_marker':ERROR_PATTERN.search(text) is None}
+    chains = 0; previous_sequence = 0; previous_clock = -1; seen_ids = set()
+    for index, header in enumerate(headers,1):
+        end = headers[index].start() if index < len(headers) else len(text)
+        part = text[header.end():end]
+        events = {}; failed = False; successful = 0
+        for line in part.splitlines():
+            match = re.search(r"\[ew_event\] event_id=(\d+) stage=(\w+)",line)
+            if match:
+                identifier, stage = match.groups()
+                if stage in {'decision','agent','tool','alert_output','complete'}:
+                    events.setdefault(identifier,[]).append(stage)
+                if stage == 'complete' and not re.search(r"\bresult=0(?:\s|$)",line): failed = True
+        for identifier, stages in events.items():
+            if int(identifier) > 0 and stages == ['decision','agent','tool','alert_output','complete'] and identifier not in seen_ids:
+                successful += 1
+            seen_ids.add(identifier)
+        chains += successful
+        snapshots = []
+        for wire in re.findall(r"^\[ew-snapshot\] (.+)$",part,re.M):
+            try:
+                value = json.loads(wire)
+                state = validate_snapshot(value,'stage3-'+str(index))
+                sequence = state['snapshot_seq']; clock = state['updated_ms']
+                if sequence <= previous_sequence or clock < previous_clock: continue
+                previous_sequence, previous_clock = sequence, clock
+                snapshots.append(state)
+            except (ValueError, TypeError, GatewayError):
+                continue
+        checks['run_'+str(index)] = (successful >= 1 and not failed and bool(snapshots)
+            and part.count('[ew-ctl] goto warn') >= 2
+            and '[ew-ctl] goto chat' in part and '[ew-ctl] goto wifi' in part
+            and '[ew-ctl] fake ' in part and '[alert_output] level=' in part)
+    return {'software_chain':'PASS' if all(checks.values()) else 'FAIL',
+            'checks':checks,'complete_event_chains':chains,'runs':runs,
+            'physical_screen_buzzer_radar':'PENDING','board_tested':False,
+            'note':'Serial logs prove software dispatch only; observe the board manually.'}
 
 
 def run_demo(port_name: str, runs: int) -> tuple[str, dict]:

@@ -17,6 +17,11 @@ import shutil
 import sys
 import tempfile
 import zipfile
+import io
+import tarfile
+import stat
+from pathlib import PurePosixPath, PureWindowsPath
+from firmware_provenance import check_config, source_digest, digest
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
@@ -32,6 +37,7 @@ MANIFEST_FILE = "delivery_manifest.json"
 CHECKSUM_FILE = "SHA256SUMS"
 TOOL_FILES = (
     "scripts/host/stage3_delivery.py",
+    "scripts/host/firmware_provenance.py",
     "scripts/host/stage3_demo_acceptance.py",
     "scripts/host/verify_firmware_candidate.py",
     "scripts/host/prepare_firmware_candidate.py",
@@ -93,7 +99,7 @@ def _firmware_report(binary: Path, elf: Path, config: Path, kind: str) -> dict:
     try:
         report = verify_firmware(
             elf.read_bytes(), binary.read_bytes(),
-            config.read_bytes().decode("utf-8"), kind,
+            check_config(config.read_bytes()), kind,
         )
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise DeliveryError(f"{kind} firmware verification failed: {exc}") from exc
@@ -296,6 +302,11 @@ def seal_release(
         _firmware_report(*agent_files, "agent") if agent_files is not None else None
     )
 
+    # Refuse secrets before copying anything into a distributable directory.
+    check_config(main_config.read_bytes())
+    if agent_files is not None: check_config(agent_files[2].read_bytes())
+    _check_build_receipt(main_build_dir, source_digest(ROOT))
+    if agent_build_dir is not None: _check_build_receipt(agent_build_dir, source_digest(ROOT))
     output.mkdir(parents=True, exist_ok=True)
     final_dir = output / version
     final_zip = output / f"{version}.zip"
@@ -310,11 +321,13 @@ def seal_release(
         _copy_file(main_bin, package_dir / "firmware/main/nuttx.bin")
         _copy_file(main_elf, package_dir / "firmware/main/nuttx")
         _copy_file(main_config, package_dir / "firmware/main/.config")
+        _copy_file(main_build_dir / "source_receipt.json", package_dir / "firmware/main/source_receipt.json")
         if agent_files is not None:
             agent_bin, agent_elf, agent_config = agent_files
             _copy_file(agent_bin, package_dir / "firmware/agent/nuttx.bin")
             _copy_file(agent_elf, package_dir / "firmware/agent/nuttx")
             _copy_file(agent_config, package_dir / "firmware/agent/.config")
+            _copy_file(agent_build_dir / "source_receipt.json", package_dir / "firmware/agent/source_receipt.json")
         _copy_file(rollback_bin, package_dir / "rollback/nuttx.bin")
         if apk is not None:
             _copy_file(apk, package_dir / "mobile/edge-walker-companion.apk")
@@ -352,6 +365,8 @@ def seal_release(
             f"{sha256_file(stage / final_zip.name)}  {final_zip.name}\n",
             encoding="utf-8",
         )
+        verify_package(package_dir)  # Verify before publishing any final path.
+        verify_package(stage / final_zip.name)
         package_dir.rename(final_dir)
         (stage / final_zip.name).rename(final_zip)
         (stage / final_zip_hash.name).rename(final_zip_hash)
@@ -387,109 +402,169 @@ def _git_head() -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def _safe_name(relative: str) -> str:
+    if (not isinstance(relative, str) or not relative or "\\" in relative
+            or ":" in relative or any(ord(c) < 32 for c in relative)
+            or PureWindowsPath(relative).anchor or PurePosixPath(relative).is_absolute()
+            or any(p in {"", ".", ".."} or p.endswith((" ", "."))
+                   or p.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *('COM'+str(i) for i in range(1,10)), *('LPT'+str(i) for i in range(1,10))}
+                   for p in relative.split("/"))):
+        raise DeliveryError("Unsafe package path")
+    return relative
+
+
+def _json(data: bytes) -> dict:
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result: raise DeliveryError("Duplicate JSON key")
+            result[key] = value
+        return result
+    value = json.loads(data.decode("utf-8"), object_pairs_hook=unique)
+    if not isinstance(value, dict): raise DeliveryError("Expected JSON object")
+    return value
+
+
 def _parse_checksums(data: bytes) -> dict[str, str]:
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise DeliveryError("SHA256SUMS is not UTF-8") from exc
-    entries: dict[str, str] = {}
-    for number, line in enumerate(text.splitlines(), 1):
-        if not line.strip():
-            continue
+    entries = {}
+    for line in data.decode("utf-8").splitlines():
         match = re.fullmatch(r"([0-9a-f]{64})  ([^\r\n]+)", line)
-        if not match:
-            raise DeliveryError(f"Malformed SHA256SUMS line {number}")
-        digest, relative = match.groups()
-        if relative in entries:
-            raise DeliveryError(f"Duplicate SHA256SUMS path: {relative}")
-        if relative.startswith("/") or ".." in Path(relative).parts:
-            raise DeliveryError(f"Unsafe package path: {relative}")
-        entries[relative] = digest
-    if not entries:
-        raise DeliveryError("SHA256SUMS is empty")
+        if not match: raise DeliveryError("Malformed SHA256SUMS")
+        value, name = match.groups()
+        _safe_name(name)
+        if name in entries: raise DeliveryError("Duplicate checksum path")
+        entries[name] = value
+    if not entries: raise DeliveryError("Empty SHA256SUMS")
     return entries
 
 
+def _check_build_receipt(build: Path, expected: str) -> None:
+    payload = _json((build / "source_receipt.json").read_bytes())
+    if payload.get("source_tree_sha256") != expected:
+        raise DeliveryError("Build/source provenance mismatch")
+    if payload.get("files") != {n: digest((build/n).read_bytes()) for n in ('nuttx.bin','nuttx','.config')}:
+        raise DeliveryError("Build receipt does not match firmware inputs")
+
+
+def _validate_contents(names: set[str], read) -> dict:
+    for name in names: _safe_name(name)
+    required = {MANIFEST_FILE, CHECKSUM_FILE, STATUS_FILE, 'source/source_input.tgz',
+                'source/input_manifest.json', 'rollback/nuttx.bin', 'firmware/main/nuttx.bin',
+                'firmware/main/nuttx', 'firmware/main/.config', 'firmware/main/source_receipt.json'}
+    if not required <= names: raise DeliveryError("Package missing required contents")
+    sums = _parse_checksums(read(CHECKSUM_FILE))
+    if set(sums) != names - {CHECKSUM_FILE}: raise DeliveryError("Unchecked or missing package contents")
+    for name, value in sums.items():
+        if digest(read(name)) != value: raise DeliveryError("Checksum mismatch: " + name)
+    manifest = _json(read(MANIFEST_FILE))
+    if (manifest.get('board_tested') is not False or manifest.get('flash_address') != FLASH_ADDRESS
+            or manifest.get('schema') != 1 or manifest.get('kind') != 'edge_walker_final_delivery'
+            or not isinstance(manifest.get('version'), str) or not VERSION_PATTERN.fullmatch(manifest['version'])):
+        raise DeliveryError("Invalid delivery manifest")
+    listed = {}
+    for entry in manifest.get('files', []):
+        name = _safe_name(entry['path'])
+        if name in listed or entry.get('bytes') != len(read(name)):
+            raise DeliveryError("Invalid manifest entry")
+        listed[name] = entry['sha256']
+    if listed != {n:v for n,v in sums.items() if n != MANIFEST_FILE}:
+        raise DeliveryError("Manifest/checksum mismatch")
+    status = _json(read(STATUS_FILE))
+    if status.get('board_tested') is not False or any(status.get(n) != 'PENDING' for n in
+        ('flash','physical_screen_buzzer','three_consecutive_demos','thirty_page_switches','two_hour_stability')):
+        raise DeliveryError("Invalid physical acceptance claim")
+    source = _json(read('source/input_manifest.json'))
+    entries = source.get('files', {})
+    expected = digest(json.dumps(entries, sort_keys=True, separators=(',', ':')).encode())
+    archive = read('source/source_input.tgz')
+    if (not isinstance(entries, dict) or not entries or source.get('source_tree_sha256') != expected
+            or source.get('archive_sha256') != digest(archive)
+            or manifest.get('source') != {'source_tree_sha256': expected, 'archive_sha256': digest(archive)}):
+        raise DeliveryError("Invalid source provenance")
+    with tarfile.open(fileobj=io.BytesIO(archive), mode='r:gz') as stream:
+        found = set(); total = 0
+        for member in stream:
+            _safe_name(member.name)
+            total += member.size
+            if (not member.isfile() or member.name in found or member.name not in entries
+                    or member.size > 64*1024*1024 or total > 512*1024*1024):
+                raise DeliveryError("Invalid source archive member")
+            data = stream.extractfile(member).read()
+            if entries[member.name] != {'sha256':digest(data),'bytes':len(data)}:
+                raise DeliveryError("Source archive/manifest mismatch")
+            found.add(member.name)
+        if found != set(entries): raise DeliveryError("Incomplete source archive")
+    for kind in ('main','agent'):
+        prefix = 'firmware/' + kind + '/'
+        present = any(n.startswith(prefix) for n in names)
+        if kind == 'agent' and not present:
+            if manifest.get('firmware',{}).get('agent') is not None: raise DeliveryError("Missing Agent firmware")
+            continue
+        if not {prefix+n for n in ('nuttx.bin','nuttx','.config','source_receipt.json')} <= names:
+            raise DeliveryError("Incomplete firmware set")
+        config = check_config(read(prefix+'.config'))
+        report = verify_firmware(read(prefix+'nuttx'),read(prefix+'nuttx.bin'),config,kind)
+        if manifest.get('firmware',{}).get(kind) != report: raise DeliveryError("Firmware report mismatch")
+        receipt = _json(read(prefix+'source_receipt.json'))
+        if (receipt.get('source_tree_sha256') != expected or receipt.get('files') !=
+                {n:digest(read(prefix+n)) for n in ('nuttx.bin','nuttx','.config')}):
+            raise DeliveryError("Firmware/source receipt mismatch")
+    if not read('rollback/nuttx.bin') or manifest.get('rollback_sha256') != digest(read('rollback/nuttx.bin')):
+        raise DeliveryError("Invalid rollback image")
+    return {'passed':True,'version':manifest['version'],'files':len(sums),
+            'board_tested':False,'physical_acceptance':'PENDING'}
+
+
 def _verify_directory(package_dir: Path) -> dict:
-    checksum_path = package_dir / CHECKSUM_FILE
-    manifest_path = package_dir / MANIFEST_FILE
-    if not checksum_path.is_file() or not manifest_path.is_file():
-        raise DeliveryError("Package lacks SHA256SUMS or delivery_manifest.json")
-    sums = _parse_checksums(checksum_path.read_bytes())
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise DeliveryError("delivery_manifest.json is invalid") from exc
-    if manifest.get("board_tested") is not False:
-        raise DeliveryError("Manifest must keep board_tested=false")
-    if manifest.get("flash_address") != FLASH_ADDRESS:
-        raise DeliveryError("Manifest has an unexpected flash address")
-    for relative, expected in sums.items():
-        path = package_dir / relative
-        if not path.is_file():
-            raise DeliveryError(f"Checksummed file is missing: {relative}")
-        if sha256_file(path) != expected:
-            raise DeliveryError(f"Checksum mismatch: {relative}")
-    listed = {entry["path"]: entry["sha256"] for entry in manifest.get("files", [])}
-    checksummed_without_manifest = {
-        path: digest for path, digest in sums.items() if path != MANIFEST_FILE
-    }
-    if listed != checksummed_without_manifest:
-        raise DeliveryError("Manifest file list does not match SHA256SUMS")
-    return {
-        "passed": True,
-        "version": manifest.get("version"),
-        "files": len(sums),
-        "board_tested": False,
-        "physical_acceptance": "PENDING",
-    }
+    # lstat every component before following anything: junctions may target UNC.
+    def regular(path):
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or getattr(info,'st_file_attributes',0) & 0x400:
+            raise DeliveryError("Package links/reparse points are forbidden")
+    import os
+    names = set()
+    for directory, folders, files in os.walk(package_dir, followlinks=False):
+        for name in folders: regular(Path(directory)/name)
+        for name in files:
+            path = Path(directory)/name; regular(path)
+            names.add(path.relative_to(package_dir).as_posix())
+    def read(name):
+        _safe_name(name)
+        path = package_dir
+        for part in name.split('/'):
+            path = path/part; regular(path)
+        if path.stat().st_size > 512*1024*1024: raise DeliveryError("Package member too large")
+        return path.read_bytes()
+    return _validate_contents(names,read)
 
 
 def _verify_zip(package_zip: Path) -> dict:
     with zipfile.ZipFile(package_zip) as archive:
-        names = archive.namelist()
-        if len(names) != len(set(names)):
-            raise DeliveryError("ZIP contains duplicate names")
-        roots = {name.split("/", 1)[0] for name in names if "/" in name}
-        if len(roots) != 1:
-            raise DeliveryError("ZIP must contain one top-level version directory")
-        prefix = roots.pop() + "/"
-        checksum_name = prefix + CHECKSUM_FILE
-        if checksum_name not in names:
-            raise DeliveryError("ZIP lacks SHA256SUMS")
-        sums = _parse_checksums(archive.read(checksum_name))
-        for relative, expected in sums.items():
-            member = prefix + relative
-            if member not in names:
-                raise DeliveryError(f"ZIP member is missing: {member}")
-            if sha256_bytes(archive.read(member)) != expected:
-                raise DeliveryError(f"ZIP checksum mismatch: {member}")
-        if prefix + MANIFEST_FILE not in names:
-            raise DeliveryError("ZIP lacks delivery_manifest.json")
-        try:
-            manifest = json.loads(archive.read(prefix + MANIFEST_FILE).decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise DeliveryError("ZIP delivery_manifest.json is invalid") from exc
-        if manifest.get("board_tested") is not False:
-            raise DeliveryError("Manifest must keep board_tested=false")
-        listed = {entry["path"]: entry["sha256"] for entry in manifest.get("files", [])}
-        checksummed_without_manifest = {
-            path: digest for path, digest in sums.items() if path != MANIFEST_FILE
-        }
-        if listed != checksummed_without_manifest:
-            raise DeliveryError("ZIP manifest file list does not match SHA256SUMS")
-    return {"passed": True, "version": manifest.get("version"),
-            "files": len(sums), "board_tested": False,
-            "physical_acceptance": "PENDING"}
+        members = archive.infolist()
+        if len(members)>4096: raise DeliveryError("Too many ZIP members")
+        mapping = {}; prefix = None; total = 0
+        for info in members:
+            _safe_name(info.filename.rstrip('/'))
+            if info.is_dir(): continue
+            if stat.S_ISLNK(info.external_attr >> 16): raise DeliveryError("ZIP links forbidden")
+            parts = info.filename.split('/',1)
+            if len(parts)!=2: raise DeliveryError("ZIP must have one version directory")
+            if prefix is None: prefix = parts[0]
+            if prefix != parts[0] or parts[1] in mapping: raise DeliveryError("Invalid ZIP layout")
+            total += info.file_size
+            if info.file_size>512*1024*1024 or total>1024*1024*1024: raise DeliveryError("ZIP too large")
+            mapping[parts[1]] = info.filename
+        return _validate_contents(set(mapping),lambda n:archive.read(mapping[_safe_name(n)]))
 
 
 def verify_package(package: Path) -> dict:
     package = package.expanduser().resolve()
-    if package.is_dir():
-        return _verify_directory(package)
-    if package.is_file() and package.suffix.lower() == ".zip":
-        return _verify_zip(package)
-    raise DeliveryError(f"Package is neither a directory nor ZIP: {package}")
+    try:
+        if package.is_dir(): return _verify_directory(package)
+        if package.is_file() and package.suffix.lower()=='.zip': return _verify_zip(package)
+        raise DeliveryError("Package is neither a directory nor ZIP")
+    except (KeyError, TypeError, ValueError, OSError, tarfile.TarError) as exc:
+        raise DeliveryError(str(exc)) from exc
 
 
 def main() -> int:
