@@ -76,6 +76,22 @@ Wi-Fi、TLS、HTTP、配置和模型回复错误会归一到稳定短码，例�
 详细交付说明和实板验收表见
 [`docs/复赛/阶段二_联网故障与对话隔离.md`](../../docs/复赛/阶段二_联网故障与对话隔离.md)。
 
+## 阶段三：封版交付
+
+封版脚本把主固件、可选独立 Agent 固件、回退镜像、源码输入和工具打成
+带 SHA256 的版本包。主机生成与校验命令：
+
+```bash
+ROLLBACK_BIN=/path/to/known_good/nuttx.bin \
+VERSION=ew-final-20261027 \
+bash scripts/guest/build_stage3_release.sh
+```
+
+烧录后连续三次演示可用
+`python scripts/host/stage3_demo_acceptance.py --port COM7 --runs 3`。
+脚本只判定软件事件链；屏幕、蜂鸣、真实雷达和长稳仍需人工验收。详细说明见
+[`docs/复赛/阶段三_封版交付.md`](../../docs/复赛/阶段三_封版交付.md)。
+
 ## 其他命令
 
 ```text

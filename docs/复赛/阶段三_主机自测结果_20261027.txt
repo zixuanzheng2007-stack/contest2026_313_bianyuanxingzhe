@@ -1,0 +1,36 @@
+边缘行者阶段三主机自测
+日期：2026-10-27
+基线：dev-ai-contest-2026 @ 2d3fb8f
+
+1. test_stage3_delivery.py
+结果：PASS（2/2）
+覆盖：主/Agent 固件离线校验、回退镜像、清单、SHA256SUMS、ZIP、篡改拒绝、
+旧版本不覆盖、board_tested=false。
+
+2. test_stage3_demo_acceptance.py
+结果：PASS（3/3）
+覆盖：三次完整 decision/agent/tool/alert_output/complete、缺段失败、
+HardFault 失败、物理项目保持 PENDING。
+
+3. bash -n
+结果：PASS
+覆盖：scripts/guest/build_stage3_release.sh 语法。
+
+4. Python 语法检查
+结果：PASS
+文件：stage3_delivery.py、stage3_demo_acceptance.py 及两个对应测试。
+
+5. 相关既有回归
+- test_firmware_candidate.py：PASS（7/7）
+- test_firmware_export.py：PASS（4/4）
+
+未完成或无法在当前环境运行：
+- 统一 run_tests.py：当前 Windows 环境缺少 GCC/Tk 等完整依赖；
+- test_build_delivery.py：Git Bash 夹具在 Windows 路径下无法创建临时绝对路径；
+  该失败发生在既有 bash 夹具准备阶段，不是阶段三 Python 逻辑失败；
+- OpenVela 编译和开发板烧录；
+- 屏幕、蜂鸣和真实 LD2451；
+- 连续三次现场演示；
+- 30 次切页和 2 小时稳定性。
+
+结论：主机测试通过不等于实板验收通过。
