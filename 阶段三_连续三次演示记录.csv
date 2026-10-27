@@ -1,8 +1,0 @@
-test_id,run,scenario,software_chain,manual_screen,manual_buzzer,real_radar,result,evidence,owner,date,note
-D1,1,WARN/CHAT/WIFI return to WARN,PENDING,PENDING,PENDING,NOT_REQUIRED,PENDING,,B/组长,,
-D2,2,WARN/CHAT/WIFI return to WARN,PENDING,PENDING,PENDING,NOT_REQUIRED,PENDING,,B/组长,,
-D3,3,WARN/CHAT/WIFI return to WARN,PENDING,PENDING,PENDING,NOT_REQUIRED,PENDING,,B/组长,,
-L1,1,@fake 1.0 40.0 event chain,PENDING,PENDING,PENDING,NOT_REQUIRED,PENDING,,B/组长,,
-L2,2,@fake 1.0 40.0 event chain,PENDING,PENDING,PENDING,NOT_REQUIRED,PENDING,,B/组长,,
-L3,3,@fake 1.0 40.0 event chain,PENDING,PENDING,PENDING,NOT_REQUIRED,PENDING,,B/组长,,
-R1,1,real target approach,PENDING,PENDING,PENDING,PENDING,PENDING,,B/组长,requires radar
