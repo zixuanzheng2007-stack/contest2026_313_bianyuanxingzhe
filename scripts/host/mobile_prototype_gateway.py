@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 import json
 import ipaddress
 import os
@@ -103,6 +104,8 @@ class PrototypeGateway(MobileSerialGateway):
         self._results = OrderedDict()
         super().__init__(board,host='127.0.0.1',port=port,max_clients=4,
                          subscription_interval_s=2,cache_capacity=256)
+        self._model_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='ew-model')
+        self._model_pending = None
 
     def server_bind(self):
         # Only this paired subclass can bind an explicitly chosen interface.
@@ -169,31 +172,86 @@ class PrototypeGateway(MobileSerialGateway):
                 if op=='ask' and (not isinstance(args['text'],str) or not args['text'].strip()
                                   or len(args['text'].encode())>1024):
                     raise GatewayError('invalid_args','Question must be 1-1024 UTF-8 bytes.')
+                if op == 'ask':
+                    self._submit_model(connection, request_id, fingerprint, args['text'])
+                    return
                 # Serializes side effects across clients and caches final results.
                 # No device command is retransmitted when a response is uncertain.
                 with self._effect_lock:
-                    if request_id in self._results:
-                        previous, result = self._results[request_id]
+                    with self._guard:
+                        cached = self._results.get(request_id)
+                    if cached is not None:
+                        previous, result = cached
                         if previous != fingerprint:
                             raise GatewayError('id_conflict','Request ID has different content.')
                         connection.send(result);return
                     connection.send({'v':1,'id':request_id,'type':'accepted','ok':True,'stage':'queued'})
                     try:
                         started=time.perf_counter()
-                        data=(self.broker.config(args['profile']) if op=='set_profile' else
-                              {'origin':'pc_prototype','reply':self.model(args['text'],self.broker.query()),
-                               'model_source':'pc_cloud','model_simulated':self.fixture_state})
+                        data=self.broker.config(args['profile'])
                         data['elapsed_ms']=round((time.perf_counter()-started)*1000)
                         result=_result(request_id,data)
                     except GatewayError as exc:
                         result=_error(request_id,exc.code,str(exc))
-                    self._results[request_id]=(fingerprint,result)
-                    while len(self._results)>64:self._results.popitem(last=False)
+                    with self._guard:
+                        self._results[request_id]=(fingerprint,result)
+                        while len(self._results)>64:self._results.popitem(last=False)
                     connection.send(result)
         except (GatewayError,ProtocolError) as exc:
             connection.send(_error(request_id,exc.code,str(exc)))
         except (UnicodeError,ValueError):
             connection.send(_error(request_id,'invalid_args','Invalid text input.'))
+
+    def _submit_model(self, connection, request_id, fingerprint, text):
+        # One bounded cloud request; socket readers and sensitivity remain free.
+        with self._guard:
+            cached = self._results.get(request_id)
+            if cached is not None:
+                if cached[0] != fingerprint:
+                    raise GatewayError('id_conflict', 'Request ID has different content.')
+                connection.send(cached[1])
+                return
+            if self._model_pending is not None:
+                pending_id, pending_fingerprint, listeners = self._model_pending
+                if pending_id != request_id:
+                    raise GatewayError('busy', 'A model question is already running; retry later.')
+                if pending_fingerprint != fingerprint:
+                    raise GatewayError('id_conflict', 'Request ID has different content.')
+                # At most four live clients; repeated sends add no listeners.
+                listeners.intersection_update(self._connections)
+                listeners.add(connection)
+                connection.send({'v':1,'id':request_id,'type':'accepted','ok':True,'stage':'queued'})
+                return
+            if self.stopping.is_set():
+                raise GatewayError('busy', 'Prototype service is stopping.')
+            self._model_pending = (request_id, fingerprint, {connection})
+            connection.send({'v':1,'id':request_id,'type':'accepted','ok':True,'stage':'queued'})
+            self._model_executor.submit(self._finish_model, request_id, fingerprint, text)
+
+    def _finish_model(self, request_id, fingerprint, text):
+        started = time.perf_counter()
+        try:
+            data = {'origin':'pc_prototype', 'reply':self.model(text, self.broker.query()),
+                    'model_source':'pc_cloud', 'model_simulated':self.fixture_state,
+                    'elapsed_ms':round((time.perf_counter()-started)*1000)}
+            result = _result(request_id, data)
+        except GatewayError as exc:
+            result = _error(request_id, exc.code, str(exc))
+        except Exception:
+            # Never expose credentials or provider response bodies in errors.
+            result = _error(request_id, 'model_failed', 'Model request failed.')
+        with self._guard:
+            listeners = self._model_pending[2]
+            self._results[request_id] = (fingerprint, result)
+            while len(self._results)>64:self._results.popitem(last=False)
+            self._model_pending = None
+        for connection in listeners:
+            connection.send(result)
+
+    def server_close(self):
+        super().server_close()
+        if hasattr(self, '_model_executor'):
+            self._model_executor.shutdown(wait=True)
 
     def _publish_loop(self):
         while not self.stopping.wait(self.subscription_interval_s):

@@ -132,5 +132,65 @@ class PrototypeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 PrototypeGateway(self.board,lambda *_:'fixture',port=0,listen_host=host)
 
+    def test_slow_model_does_not_block_other_client_sensitivity(self):
+        entered, release = threading.Event(), threading.Event()
+        def slow_model(text, state):
+            entered.set()
+            if not release.wait(4):
+                raise GatewayError('model_failed', 'Fixture timeout')
+            return 'EXPLICIT MODEL FIXTURE'
+        self.server.model = slow_model
+        other = Client(self.server.address)
+        try:
+            self.hello()
+            other.send('other-hello', 'hello')
+            self.assertTrue(other.result('other-hello')['ok'])
+            self.client.send('slow-ask', 'ask', {'text':'test'})
+            self.assertEqual(self.client.result('slow-ask')['stage'], 'queued')
+            self.assertTrue(entered.wait(1))
+            other.send('independent-set', 'set_profile', {'profile':'early'})
+            self.assertEqual(other.result('independent-set', timeout=.8)['stage'], 'queued')
+            result = other.result('independent-set', timeout=.8)
+            self.assertTrue(result['ok'])
+            self.assertEqual(result['data']['profile'], 'early')
+            self.assertFalse(release.is_set())
+            # The Android app uses a single socket: it must stay responsive too.
+            self.client.send('same-socket-set', 'set_profile', {'profile':'standard'})
+            self.assertTrue(self.final('same-socket-set')['ok'])
+            self.client.send('same-socket-state', 'get_state')
+            self.assertEqual(self.final('same-socket-state')['data']['profile'], 'standard')
+            self.assertFalse(release.is_set())
+        finally:
+            release.set()
+            other.close()
+        self.assertTrue(self.final('slow-ask')['ok'])
+
+    def test_inflight_model_is_bounded_deduplicated_and_failure_cached(self):
+        entered, release = threading.Event(), threading.Event()
+        calls = []
+        def failing_model(text, state):
+            calls.append(text)
+            entered.set()
+            release.wait(3)
+            raise RuntimeError('PRIVATE PROVIDER BODY')
+        self.server.model = failing_model
+        self.hello()
+        try:
+            self.client.send('running', 'ask', {'text':'test'})
+            self.assertEqual(self.client.result('running')['stage'], 'queued')
+            self.assertTrue(entered.wait(1))
+            self.client.send('running', 'ask', {'text':'test'})
+            self.assertEqual(self.client.result('running')['stage'], 'queued')
+            self.client.send('second', 'ask', {'text':'other'})
+            self.assertEqual(self.final('second')['error']['code'], 'busy')
+        finally:
+            release.set()
+        result = self.final('running')
+        self.assertEqual(result['error']['code'], 'model_failed')
+        self.assertNotIn('PRIVATE', json.dumps(result))
+        self.client.send('running', 'ask', {'text':'test'})
+        self.assertEqual(self.final('running'), result)
+        self.assertEqual(calls, ['test'])
+
 
 if __name__=='__main__':unittest.main(verbosity=2)
