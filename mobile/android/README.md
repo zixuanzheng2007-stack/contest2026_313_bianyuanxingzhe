@@ -18,12 +18,12 @@
 ## 使用
 
 1. 在电脑显式启动配套模拟服务器，或使用明确指定串口的只读串口网关；两者使用不同端口时在应用中填写相应端口。
-2. 打开应用，填写主机与端口并点击“连接设备”。MuMu 默认 `10.0.2.2:8765`；配套服务只监听电脑回环地址，当前不提供手机经局域网直接连接。手机实测待后续设备链路就绪后进行。
-3. `hello` 仅接受 `origin=simulator` 或 `origin=pc_gateway`，并要求声明状态查询能力。模拟器仅启用已知且声明支持的操作；网关无论声明什么能力，都只允许 `get_state` 和 `subscribe_state`。
+2. 打开应用，填写主机与端口并点击“连接设备”。MuMu 默认 `10.0.2.2:8765`；普通模拟器和只读网关只监听电脑回环地址；电脑转发原型的配对网络模式另见上级README，需明确配置服务地址、允许客户端与连接码。实体手机实测按独立证据记录。
+3. `hello` 接受 `origin=simulator`、`origin=pc_gateway` 或受限的 `origin=pc_prototype`，并要求声明状态查询能力。模拟器仅启用已知且声明支持的操作；只读网关无论声明什么能力，都只允许 `get_state` 和 `subscribe_state`；电脑转发原型仅允许状态、标准/提前档配置和问答，告警测试保持停用。
 4. 模拟器可刷新状态、测试 soft/strong 告警、切换 walk/cycle 档位、发送文字问题、查看最近事件。告警测试持续 2 秒。只读网关只提供状态查询和订阅，问答、告警测试、档位和问题输入均禁用。
 5. 应用进入后台或销毁时关闭连接；返回前台需要手动重新连接。保存的只是地址/端口，不自动连接任何目标。
 
-本地开发协议使用未加密 TCP；串口网关接入尚不等于独立 Wi-Fi/BLE 或实机验收，也不开放真实设备写操作或公网账户服务。
+本地开发协议使用未加密 TCP；电脑转发接入尚不等于独立 Wi-Fi/BLE 或实机验收。只读串口网关不开放写操作；电脑转发原型仅提供顶部说明的有限配置与问答能力，不提供公网账户服务。
 
 ## 协议与执行语义
 
@@ -32,13 +32,23 @@ UTF-8 JSONL，协议版本 `v=1`，每个请求带唯一 `id`、`op`、`args`。
 - `accepted / stage=queued`：显示“已接收并排队，尚未执行完成”。不视为执行成功。
 - `result / ok=true / stage=applied`：显示已应用；告警以返回的 `event_id` 关联日志。
 - `result / ok=false`：显示服务端 `error.code` 与 `error.message`，按执行失败处理。
-- 等待超时：显示执行结果未知，提示刷新确认。已 queued 却无最终结果时不会宣称失败或成功。
+- 等待超时：从请求首次发送时开始按绝对期限计时（普通请求 12 秒，问答 60 秒）；`accepted / queued` 和重复 queued 均不延长期限，重复确认也只记录首次状态转换。超时显示执行结果未知，提示刷新确认；已 queued 却无最终结果时不会宣称失败或成功，也不会自动重发请求。接收回执时会先按单调时钟清理过期请求，尚未来得及由 watchdog 清理的迟到 queued/applied 也不能确认操作。截止时刻本身仍允许回执，超过截止才过期；每秒一次的 watchdog 使无回执时的超时显示通常滞后不超过约1秒，主线程繁忙时可能更晚，截止时间不会因此延长。
 - `event=state` 的 envelope source 和 data origin 必须与已协商来源相同；simulator 的 envelope event_id 必须与状态 event_id 相同，pc_gateway 则必须与状态 snapshot_seq 相同。5 秒无新状态则标注过期。
 - 模拟器按 event_id 排序；只读网关按每快照递增的 snapshot_seq 排序，同时保留显示真实告警 event_id。标识必须是非负 JSON 整数，不能用时钟代替顺序；新连接重置顺序标记。
 - 网关快照中的 range_m/speed_kmh 可以为 null，显示为“—”；profile 必须为 null，显示“未提供（只读）”，不填入演示值。已知雷达链路 ok/waiting/no_frame/stale/error 分别显示正常、等待数据、无有效帧（与板端 NO FRAME 一致）、数据已过期、故障；未知值作为协议错误处理。
 - 网关 updated_ms 属于 device_monotonic，不能当作日期。界面使用 received_at_ms 的网关墙钟，并明确显示“网关接收”；模拟器继续使用它的 epoch updated_ms。
 
-网络连接、读取、写入均在后台线程，UI 通过主线程 Handler 更新；单条消息上限 **8192 字节**，UTF-8 严格解码，半条消息接收限时 5 秒，TCP 连接限时 5 秒，连接/握手总等待 8 秒，操作请求限时 12 秒；发送队列和未完成请求有上限。连接或协议错误会显式显示并停用操作。
+网络连接、读取、写入均在后台线程，UI 通过主线程 Handler 更新；单条消息上限 **8192 字节**，UTF-8 严格解码，半条消息接收限时 5 秒，TCP 连接限时 5 秒，连接/握手总等待 8 秒，普通操作请求限时 12 秒、问答请求限时 60 秒；发送队列和未完成请求有上限。连接或协议错误会显式显示并停用操作。
+
+请求绝对等待期限与 queued 幂等状态放在无 Android 依赖的 `RequestWaitState.java`。Host 覆盖测试位于 `scripts/host/RequestWaitStateTest.java` 和 `test_mobile_request_wait_source.py`，可在仓库根目录执行：
+
+```powershell
+$classes = Join-Path $env:TEMP 'mobile-request-wait-test'
+New-Item -ItemType Directory -Force $classes | Out-Null
+javac -encoding UTF-8 -d $classes mobile/android/src/com/edgewalker/companion/RequestWaitState.java scripts/host/RequestWaitStateTest.java
+java -cp $classes com.edgewalker.companion.RequestWaitStateTest
+python scripts/host/test_mobile_request_wait_source.py
+```
 
 ## 官方技术依据
 

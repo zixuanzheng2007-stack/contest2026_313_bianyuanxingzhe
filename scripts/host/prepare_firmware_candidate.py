@@ -21,6 +21,9 @@ SOURCE_DIRECTORIES = ("app/edge_walker", "board_overlay/sf32lb52_devkit_lcd",
 TEST_SUPPORT = ("tools/ew_panel.py", "scripts/host/board_snapshot_acceptance.py",
                 "scripts/host/verify_firmware_candidate.py",
                 "scripts/host/roadtest_capture.py",
+                "mobile/android/src/com/edgewalker/companion/MainActivity.java",
+                "mobile/android/src/com/edgewalker/companion/RequestWaitState.java",
+                "scripts/host/RequestWaitStateTest.java",
                 "scripts/host/fixtures/radar_safety/synthetic_sequence.csv")
 
 

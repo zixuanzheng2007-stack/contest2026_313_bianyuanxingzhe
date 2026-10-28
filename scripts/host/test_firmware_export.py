@@ -56,9 +56,12 @@ class FirmwareExport(unittest.TestCase):
             roadtest = root / "scripts/host/test_roadtest_capture.py"
             roadtest.parent.mkdir(parents=True, exist_ok=True)
             roadtest.write_bytes(b"test-support\n")
+            wait_source_test = root / "scripts/host/test_mobile_request_wait_source.py"
+            wait_source_test.write_bytes(b"test-support\n")
             manifest = seal(root, root / "delivery", "with-test-support")
             self.assertEqual(set(manifest["files"]), set(TEST_SUPPORT) | {
-                "scripts/host/test_roadtest_capture.py"})
+                "scripts/host/test_roadtest_capture.py",
+                "scripts/host/test_mobile_request_wait_source.py"})
 
     def test_crlf_shell_cannot_be_published_as_linux_build_input(self):
         with tempfile.TemporaryDirectory(prefix="ew_export_crlf_") as directory:

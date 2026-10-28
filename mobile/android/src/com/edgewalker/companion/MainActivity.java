@@ -49,8 +49,6 @@ public final class MainActivity extends Activity {
     private static final int RED = Color.rgb(173, 49, 49);
     private static final int BG = Color.rgb(243, 245, 242);
     private static final int MAX_LOG_LINES = 36;
-    private static final long REQUEST_TIMEOUT_MS = 12000;
-
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Set<String> capabilities = new HashSet<>();
     private final Map<String, Pending> pending = new HashMap<>();
@@ -107,12 +105,11 @@ public final class MainActivity extends Activity {
 
     private static final class Pending {
         final String operation;
-        long deadline;
-        boolean queued;
+        final RequestWaitState waitState;
 
         Pending(String operation) {
             this.operation = operation;
-            this.deadline = SystemClock.elapsedRealtime() + ("ask".equals(operation) ? 60000 : REQUEST_TIMEOUT_MS);
+            this.waitState = new RequestWaitState(operation, SystemClock.elapsedRealtime());
         }
     }
 
@@ -499,6 +496,9 @@ public final class MainActivity extends Activity {
                 }
                 return;
             }
+            // Expire before looking up replies, even when the watchdog has not run.
+            long receivedAt = SystemClock.elapsedRealtime();
+            expirePendingRequests(receivedAt);
             String id = message.getString("id");
             Pending item = pending.get(id);
             if (item == null) {
@@ -510,10 +510,10 @@ public final class MainActivity extends Activity {
                 if (!ok || !"queued".equals(message.optString("stage"))) {
                     throw new JSONException("接收确认格式错误");
                 }
-                item.queued = true;
-                item.deadline = SystemClock.elapsedRealtime() + ("ask".equals(item.operation) ? 60000 : REQUEST_TIMEOUT_MS);
-                showAction(operationLabel(item.operation) + "：已接收并排队，尚未执行完成", ORANGE);
-                appendLog("已接收 queued · " + operationLabel(item.operation));
+                if (item.waitState.markQueued(receivedAt)) {
+                    showAction(operationLabel(item.operation) + "：已接收并排队，尚未执行完成", ORANGE);
+                    appendLog("已接收 queued · " + operationLabel(item.operation));
+                }
                 return;
             }
             if (!"result".equals(type)) {
@@ -918,31 +918,36 @@ public final class MainActivity extends Activity {
         return false;
     }
 
+    /** Main-thread only; shared by incoming replies and the periodic watchdog. */
+    private void expirePendingRequests(long now) {
+        Iterator<Map.Entry<String, Pending>> iterator = pending.entrySet().iterator();
+        boolean changed = false;
+        boolean helloTimedOut = false;
+        while (iterator.hasNext()) {
+            Pending item = iterator.next().getValue();
+            if (item.waitState.isExpired(now)) {
+                iterator.remove();
+                changed = true;
+                helloTimedOut |= "hello".equals(item.operation);
+                showAction(operationLabel(item.operation) + "：等待超时，执行结果未知，请刷新确认", ORANGE);
+                appendLog("超时 · " + operationLabel(item.operation)
+                        + (item.waitState.isQueued() ? " · 已排队但无最终回复" : " · 无服务端确认"));
+            }
+        }
+        if (helloTimedOut) {
+            disconnect("协议握手超时", true);
+        } else if (changed) {
+            updateControls();
+        }
+    }
+
     private final Runnable watchdog = new Runnable() {
         @Override public void run() {
             if (destroyed) {
                 return;
             }
             long now = SystemClock.elapsedRealtime();
-            Iterator<Map.Entry<String, Pending>> iterator = pending.entrySet().iterator();
-            boolean changed = false;
-            boolean helloTimedOut = false;
-            while (iterator.hasNext()) {
-                Pending item = iterator.next().getValue();
-                if (now > item.deadline) {
-                    iterator.remove();
-                    changed = true;
-                    helloTimedOut |= "hello".equals(item.operation);
-                    showAction(operationLabel(item.operation) + "：等待超时，执行结果未知，请刷新确认", ORANGE);
-                    appendLog("超时 · " + operationLabel(item.operation)
-                            + (item.queued ? " · 已排队但无最终回复" : " · 无服务端确认"));
-                }
-            }
-            if (helloTimedOut) {
-                disconnect("协议握手超时", true);
-            } else if (changed) {
-                updateControls();
-            }
+            expirePendingRequests(now);
             if (ready && lastStateElapsed != 0 && now - lastStateElapsed > 5000) {
                 updatedText.setText(lastStateDescription + " · 数据已过期，请刷新");
                 updatedText.setTextColor(ORANGE);
